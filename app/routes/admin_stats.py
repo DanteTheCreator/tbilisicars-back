@@ -11,7 +11,6 @@ from app.models.vehicle import Vehicle
 from app.models.booking import Booking
 from app.models.user import User
 from app.models.payment import Payment, PaymentStatusEnum
-from app.models.maintenance import Maintenance
 
 router = APIRouter()
 
@@ -44,11 +43,6 @@ async def get_admin_stats(
         
         # Total users
         total_users = db.query(User).count()
-        
-        # Pending maintenance (using is_out_of_service as a proxy)
-        pending_maintenance = db.query(Maintenance).filter(
-            Maintenance.is_out_of_service == True
-        ).count()
         
         # Monthly revenue (current month) - simplified query for now
         start_of_month = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
@@ -111,17 +105,6 @@ async def get_admin_stats(
                 "status": booking.status
             })
         
-        # Recent maintenance
-        recent_maintenance = db.query(Maintenance).order_by(Maintenance.created_at.desc()).limit(5).all()
-        for maintenance in recent_maintenance:
-            recent_activity.append({
-                "id": maintenance.id,
-                "type": "maintenance",
-                "description": f"Maintenance scheduled for {maintenance.vehicle.make} {maintenance.vehicle.model}",
-                "timestamp": maintenance.created_at.isoformat(),
-                "status": "out_of_service" if maintenance.is_out_of_service else "completed"
-            })
-        
         # Sort recent activity by timestamp
         recent_activity.sort(key=lambda x: x["timestamp"], reverse=True)
         recent_activity = recent_activity[:15]  # Keep only top 15
@@ -131,7 +114,6 @@ async def get_admin_stats(
             "available_vehicles": available_vehicles,
             "active_bookings": active_bookings,
             "total_users": total_users,
-            "pending_maintenance": pending_maintenance,
             "monthly_revenue": float(monthly_revenue),
             "revenue_growth": round(revenue_growth, 2),
             "booking_growth": round(booking_growth, 2),
@@ -148,7 +130,6 @@ async def get_admin_stats(
             "available_vehicles": 0,
             "active_bookings": 0,
             "total_users": 0,
-            "pending_maintenance": 0,
             "monthly_revenue": 0,
             "revenue_growth": 0,
             "booking_growth": 0,
@@ -197,21 +178,6 @@ async def get_recent_activity(
                 "timestamp": user.created_at,
                 "user": f"{user.first_name} {user.last_name}",
                 "status": "info"
-            })
-        
-        # Recent maintenance
-        recent_maintenance = db.query(Maintenance).order_by(
-            Maintenance.created_at.desc()
-        ).limit(3).all()
-        
-        for maintenance in recent_maintenance:
-            activities.append({
-                "id": f"maintenance_{maintenance.id}",
-                "type": "maintenance",
-                "message": f"Maintenance scheduled for {maintenance.vehicle.make} {maintenance.vehicle.model}" if maintenance.vehicle else f"Maintenance scheduled (ID: {maintenance.id})",
-                "timestamp": maintenance.created_at,
-                "user": "Service Team",
-                "status": "warning" if maintenance.status == "pending" else "success"
             })
         
         # Recent payments

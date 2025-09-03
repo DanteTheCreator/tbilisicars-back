@@ -13,7 +13,6 @@ from .bookings import router as bookings_router
 from .extras import router as extras_router
 from .booking_extras import router as booking_extras_router
 from .payments import router as payments_router
-from .maintenances import router as maintenances_router
 from .damages import router as damages_router
 from .promos import router as promos_router
 from .booking_promos import router as booking_promos_router
@@ -35,7 +34,6 @@ api_router.include_router(bookings_router)
 api_router.include_router(extras_router)
 api_router.include_router(booking_extras_router)
 api_router.include_router(payments_router)
-api_router.include_router(maintenances_router)
 api_router.include_router(damages_router)
 api_router.include_router(promos_router)
 api_router.include_router(booking_promos_router)

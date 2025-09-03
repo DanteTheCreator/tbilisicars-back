@@ -14,7 +14,6 @@ class VehicleStatusEnum(str, PyEnum):
     AVAILABLE = "available"
     RESERVED = "reserved"
     OUT_OF_SERVICE = "out_of_service"
-    IN_MAINTENANCE = "in_maintenance"
 
 
 class FuelTypeEnum(str, PyEnum):
@@ -74,6 +73,5 @@ class Vehicle(Base, TimestampMixin):
     location: Mapped[Optional["Location"]] = relationship(back_populates="vehicles")
     prices: Mapped[List["VehiclePrice"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")
     bookings: Mapped[List["Booking"]] = relationship(back_populates="vehicle")
-    maintenances: Mapped[List["Maintenance"]] = relationship(back_populates="vehicle")
     damages: Mapped[List["DamageReport"]] = relationship(back_populates="vehicle")
     documents: Mapped[List["VehicleDocument"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")

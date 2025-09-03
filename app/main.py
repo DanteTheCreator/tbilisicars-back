@@ -25,7 +25,7 @@ async def health():
 # Import and mount routes AFTER middleware
 from .routes import (
     bookings, users, vehicles, locations, damages, documents,
-    maintenances, payments, reviews, promos, booking_extras,
+    payments, reviews, promos, booking_extras,
     booking_promos, vehicle_prices, extras
 )
 

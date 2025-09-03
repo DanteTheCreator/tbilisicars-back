@@ -43,13 +43,6 @@ DEFAULT_SETTINGS = {
         "marketing_emails": False,
         "webhook_url": ""
     },
-    "maintenance": {
-        "service_interval_km": 10000,
-        "oil_change_interval": 6,
-        "inspection_interval": 12,
-        "auto_schedule_maintenance": True,
-        "maintenance_buffer_days": 3
-    },
     "vehicles": {
         "default_fuel_level": 100,
         "min_fuel_level": 25,

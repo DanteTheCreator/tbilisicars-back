@@ -11,7 +11,6 @@ from app.models.vehicle import Vehicle
 from app.models.booking import Booking
 from app.models.user import User
 from app.models.payment import Payment
-from app.models.maintenance import Maintenance
 
 router = APIRouter()
 
@@ -73,9 +72,6 @@ async def get_reports(
         ).count()
         rented_vehicles = db.query(Vehicle).filter(
             Vehicle.status == 'rented'
-        ).count()
-        maintenance_vehicles = db.query(Vehicle).filter(
-            Vehicle.status == 'maintenance'
         ).count()
         
         utilization = (rented_vehicles / total_vehicles * 100) if total_vehicles > 0 else 0
@@ -152,7 +148,6 @@ async def get_reports(
                 "total": total_vehicles,
                 "available": available_vehicles,
                 "rented": rented_vehicles,
-                "maintenance": maintenance_vehicles,
                 "utilization": utilization
             },
             "revenue": {
@@ -175,7 +170,7 @@ async def get_reports(
         return {
             "error": f"Failed to generate report: {str(e)}",
             "bookings": {"total": 0, "confirmed": 0, "canceled": 0, "revenue": 0, "growth": 0},
-            "vehicles": {"total": 0, "available": 0, "rented": 0, "maintenance": 0, "utilization": 0},
+            "vehicles": {"total": 0, "available": 0, "rented": 0, "utilization": 0},
             "revenue": {"monthly": 0, "weekly": 0, "daily": 0, "growth": 0},
             "customers": {"total": 0, "new": 0, "returning": 0, "growth": 0},
             "popular_vehicles": [],
