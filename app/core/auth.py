@@ -1,0 +1,128 @@
+from __future__ import annotations
+
+from datetime import datetime, timedelta
+from typing import Optional
+
+from fastapi import Depends, HTTPException, status
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from jose import JWTError, jwt
+from passlib.context import CryptContext
+from sqlalchemy.orm import Session
+
+from app.core.config import get_settings
+from app.core.db import get_db
+from app.models.admin import Admin
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+
+# JWT token security
+security = HTTPBearer()
+
+settings = get_settings()
+
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    """Verify a plain password against a hashed password."""
+    return pwd_context.verify(plain_password, hashed_password)
+
+
+def get_password_hash(password: str) -> str:
+    """Hash a password."""
+    return pwd_context.hash(password)
+
+
+def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -> str:
+    """Create a JWT access token."""
+    to_encode = data.copy()
+    if expires_delta:
+        expire = datetime.utcnow() + expires_delta
+    else:
+        expire = datetime.utcnow() + timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES)
+    
+    to_encode.update({"exp": expire})
+    encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    return encoded_jwt
+
+
+def verify_token(token: str) -> Optional[dict]:
+    """Verify and decode a JWT token."""
+    try:
+        payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
+        return payload
+    except JWTError:
+        return None
+
+
+def authenticate_admin(db: Session, username: str, password: str) -> Optional[Admin]:
+    """Authenticate an admin user."""
+    admin = db.query(Admin).filter(
+        (Admin.username == username) | (Admin.email == username)
+    ).first()
+    
+    if not admin or not verify_password(password, admin.hashed_password):
+        return None
+    
+    if not admin.is_active:
+        return None
+    
+    # Update last login
+    admin.last_login = datetime.utcnow()
+    db.commit()
+    
+    return admin
+
+
+def get_current_admin(
+    credentials: HTTPAuthorizationCredentials = Depends(security),
+    db: Session = Depends(get_db)
+) -> Admin:
+    """Get current authenticated admin from JWT token."""
+    credentials_exception = HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Could not validate credentials",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    
+    try:
+        payload = verify_token(credentials.credentials)
+        if payload is None:
+            raise credentials_exception
+        
+        admin_id_str = payload.get("sub")
+        if admin_id_str is None:
+            raise credentials_exception
+        
+        # Convert string to integer
+        admin_id = int(admin_id_str)
+            
+    except (JWTError, ValueError, TypeError):
+        raise credentials_exception
+    
+    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    if admin is None or not admin.is_active:
+        raise credentials_exception
+    
+    return admin
+
+
+def get_current_super_admin(current_admin: Admin = Depends(get_current_admin)) -> Admin:
+    """Get current authenticated super admin."""
+    if not current_admin.is_super_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not enough permissions"
+        )
+    return current_admin
+
+
+def require_permission(permission: str):
+    """Decorator to require specific permission."""
+    def permission_dependency(current_admin: Admin = Depends(get_current_admin)) -> Admin:
+        if not getattr(current_admin, permission, False) and not current_admin.is_super_admin:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Permission required: {permission}"
+            )
+        return current_admin
+    return permission_dependency
