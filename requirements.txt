@@ -9,4 +9,6 @@ minio==7.2.7
 pillow==10.4.0
 python-multipart==0.0.9
 passlib[bcrypt]==1.7.4
+bcrypt==3.2.0
 python-jose[cryptography]==3.3.0
+

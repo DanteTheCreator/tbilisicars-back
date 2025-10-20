@@ -5,6 +5,7 @@ from typing import Optional, BinaryIO
 import io
 from PIL import Image
 import uuid
+import urllib3
 
 class MinIOClient:
     def __init__(self):
@@ -13,15 +14,44 @@ class MinIOClient:
         self.secret_key = os.getenv('MINIO_SECRET_KEY', 'MinioSecurePass2025')
         self.secure = os.getenv('MINIO_SECURE', 'false').lower() == 'true'
         
+        # Public endpoint for URL generation (accessible from browser)
+        self.public_endpoint = os.getenv('MINIO_PUBLIC_ENDPOINT', 'tbilisicars.live:9000')
+        self.public_secure = os.getenv('MINIO_PUBLIC_SECURE', 'true').lower() == 'true'
+        self.force_http_urls = os.getenv('MINIO_FORCE_HTTP', 'false').lower() == 'true'
+        
+        # Debug environment variables
+        print(f"[DEBUG] MINIO_ENDPOINT: {self.endpoint}")
+        print(f"[DEBUG] MINIO_PUBLIC_ENDPOINT: {self.public_endpoint}")
+        print(f"[DEBUG] MINIO_PUBLIC_SECURE: {self.public_secure}")
+        
         self.vehicle_photos_bucket = os.getenv('MINIO_VEHICLE_PHOTOS_BUCKET', 'vehicle-photos')
         self.vehicle_documents_bucket = os.getenv('MINIO_VEHICLE_DOCUMENTS_BUCKET', 'vehicle-documents')
         self.user_documents_bucket = os.getenv('MINIO_USER_DOCUMENTS_BUCKET', 'user-documents')
+        
+        # For HTTPS connections, disable SSL verification for internal Docker network
+        http_client = None
+        if self.secure:
+            http_client = urllib3.PoolManager(cert_reqs='CERT_NONE')
         
         self.client = Minio(
             self.endpoint,
             access_key=self.access_key,
             secret_key=self.secret_key,
-            secure=self.secure
+            secure=self.secure,
+            http_client=http_client
+        )
+        
+        # Client for public URL generation - also with SSL verification disabled
+        public_http_client = None
+        if self.public_secure:
+            public_http_client = urllib3.PoolManager(cert_reqs='CERT_NONE')
+        
+        self.public_client = Minio(
+            self.public_endpoint,
+            access_key=self.access_key,
+            secret_key=self.secret_key,
+            secure=self.public_secure,
+            http_client=public_http_client
         )
         
         self._ensure_buckets_exist()
@@ -141,15 +171,26 @@ class MinIOClient:
     
     def get_presigned_url(self, bucket: str, object_name: str, expires_in_hours: int = 24) -> Optional[str]:
         """
-        Get a presigned URL for accessing an object
+        Get a presigned URL for accessing an object (using public endpoint)
         """
         try:
             from datetime import timedelta
-            url = self.client.presigned_get_object(
+            print(f"[DEBUG] Generating presigned URL using public endpoint: {self.public_endpoint}")
+            print(f"[DEBUG] Public secure: {self.public_secure}")
+            
+            # Generate presigned URL using the public client
+            url = self.public_client.presigned_get_object(
                 bucket,
                 object_name,
                 expires=timedelta(hours=expires_in_hours)
             )
+            
+            # If HTTPS fails, fallback to HTTP for presigned URLs
+            if self.force_http_urls and url.startswith('https://'):
+                print(f"[DEBUG] Converting HTTPS URL to HTTP due to MINIO_FORCE_HTTP=true")
+                url = url.replace('https://', 'http://')
+            
+            print(f"[DEBUG] Generated URL: {url}")
             return url
         except S3Error as e:
             print(f"Error generating presigned URL: {e}")

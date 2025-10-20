@@ -1,74 +1,63 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
-from typing import List, Optional
-import os
+from typing import List
 
 from app.core.db import get_db
 from app.core.minio import minio_client
-from app.models.vehicle import Vehicle
-from app.models.vehicle_photo import VehiclePhoto
+from app.models.booking import Booking
+from app.models.booking_photo import BookingPhoto
 
 router = APIRouter()
 
-@router.post("/vehicles/{vehicle_id}/photos")
-async def upload_vehicle_photos(
-    vehicle_id: int,
+@router.post("/bookings/{booking_id}/photos")
+async def upload_booking_photos(
+    booking_id: int,
     files: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
-    """
-    Upload one or more photos for a vehicle
-    """
-    # Check if vehicle exists
-    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
-    if not vehicle:
-        raise HTTPException(status_code=404, detail="Vehicle not found")
-    
-    # Validate file types
+    # Check if booking exists
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
     allowed_extensions = {'jpg', 'jpeg', 'png', 'webp'}
     max_file_size = 10 * 1024 * 1024  # 10MB
-    
+
     uploaded_photos = []
     errors = []
-    
+
     for file in files:
         try:
-            # Validate file extension
             file_extension = file.filename.split('.')[-1].lower()
             if file_extension not in allowed_extensions:
                 errors.append(f"File {file.filename}: Invalid file type. Allowed: {', '.join(allowed_extensions)}")
                 continue
-            
-            # Validate file size
+
             content = await file.read()
             file_size = len(content)
             if file_size > max_file_size:
                 errors.append(f"File {file.filename}: File too large. Maximum size: 10MB")
                 continue
-            
-            # Reset file pointer
+
             await file.seek(0)
-            
-            # Upload to MinIO
-            object_name = minio_client.upload_vehicle_photo(file.file, file.filename, vehicle_id)
-            
+
+            # Upload to MinIO using vehicle_photos bucket (reusing bucket for now)
+            object_name = minio_client.upload_vehicle_photo(file.file, file.filename, booking_id)
+
             if object_name:
-                # Save photo metadata to database
-                photo_record = VehiclePhoto(
-                    vehicle_id=vehicle_id,
+                photo_record = BookingPhoto(
+                    booking_id=booking_id,
                     object_name=object_name,
                     original_filename=file.filename,
                     file_size=file_size,
                     content_type=file.content_type or f"image/{file_extension}",
-                    display_order=0  # Can be updated later for ordering
+                    display_order=0
                 )
-                
                 db.add(photo_record)
                 db.commit()
                 db.refresh(photo_record)
-                
-                # Get the public URL
+
                 photo_url = minio_client.get_vehicle_photo_url(object_name)
                 uploaded_photos.append({
                     "id": photo_record.id,
@@ -81,12 +70,10 @@ async def upload_vehicle_photos(
                 })
             else:
                 errors.append(f"File {file.filename}: Failed to upload to storage")
-                
         except Exception as e:
             errors.append(f"File {file.filename}: {str(e)}")
-            # Rollback any partial database changes
             db.rollback()
-    
+
     return JSONResponse(content={
         "message": f"Processed {len(files)} files",
         "uploaded": uploaded_photos,
@@ -95,27 +82,22 @@ async def upload_vehicle_photos(
         "total_errors": len(errors)
     })
 
-@router.get("/vehicles/{vehicle_id}/photos")
-async def get_vehicle_photos(
-    vehicle_id: int,
+
+@router.get("/bookings/{booking_id}/photos")
+async def get_booking_photos(
+    booking_id: int,
     db: Session = Depends(get_db)
 ):
-    """
-    Get all photos for a vehicle from database with MinIO URLs
-    """
-    # Check if vehicle exists
-    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
-    if not vehicle:
-        raise HTTPException(status_code=404, detail="Vehicle not found")
-    
-    # Get photos from database (ordered by display_order)
-    photo_records = db.query(VehiclePhoto).filter(
-        VehiclePhoto.vehicle_id == vehicle_id
-    ).order_by(VehiclePhoto.display_order, VehiclePhoto.created_at).all()
-    
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    photo_records = db.query(BookingPhoto).filter(
+        BookingPhoto.booking_id == booking_id
+    ).order_by(BookingPhoto.display_order, BookingPhoto.created_at).all()
+
     photos = []
     for photo_record in photo_records:
-        # Get current MinIO URL for the photo
         photo_url = minio_client.get_vehicle_photo_url(photo_record.object_name)
         if photo_url:
             photos.append({
@@ -131,45 +113,37 @@ async def get_vehicle_photos(
                 "created_at": photo_record.created_at.isoformat(),
                 "updated_at": photo_record.updated_at.isoformat()
             })
-    
+
     return JSONResponse(content={
-        "vehicle_id": vehicle_id,
+        "booking_id": booking_id,
         "photos": photos,
         "total_photos": len(photos)
     })
 
-@router.delete("/vehicles/{vehicle_id}/photos/{object_name:path}")
-async def delete_vehicle_photo(
-    vehicle_id: int,
+
+@router.delete("/bookings/{booking_id}/photos/{object_name:path}")
+async def delete_booking_photo(
+    booking_id: int,
     object_name: str,
     db: Session = Depends(get_db)
 ):
-    """
-    Delete a specific vehicle photo from both MinIO and database
-    """
-    # Check if vehicle exists
-    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
-    if not vehicle:
-        raise HTTPException(status_code=404, detail="Vehicle not found")
-    
-    # Find the photo record in database
-    photo_record = db.query(VehiclePhoto).filter(
-        VehiclePhoto.vehicle_id == vehicle_id,
-        VehiclePhoto.object_name == object_name
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    photo_record = db.query(BookingPhoto).filter(
+        BookingPhoto.booking_id == booking_id,
+        BookingPhoto.object_name == object_name
     ).first()
-    
+
     if not photo_record:
         raise HTTPException(status_code=404, detail="Photo not found")
-    
+
     try:
-        # Delete from MinIO first
         minio_success = minio_client.delete_vehicle_photo(object_name)
-        
         if minio_success:
-            # Delete from database
             db.delete(photo_record)
             db.commit()
-            
             return JSONResponse(content={
                 "message": "Photo deleted successfully",
                 "object_name": object_name,
@@ -177,105 +151,76 @@ async def delete_vehicle_photo(
             })
         else:
             raise HTTPException(status_code=500, detail="Failed to delete photo from storage")
-            
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to delete photo: {str(e)}")
 
-@router.put("/vehicles/{vehicle_id}/photos/{photo_id}/primary")
+
+@router.put("/bookings/{booking_id}/photos/{photo_id}/primary")
 async def set_primary_photo(
-    vehicle_id: int,
+    booking_id: int,
     photo_id: int,
     db: Session = Depends(get_db)
 ):
-    """
-    Set a photo as the primary photo for a vehicle
-    """
-    # Check if vehicle exists
-    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
-    if not vehicle:
-        raise HTTPException(status_code=404, detail="Vehicle not found")
-    
-    # Find the photo record
-    photo_record = db.query(VehiclePhoto).filter(
-        VehiclePhoto.id == photo_id,
-        VehiclePhoto.vehicle_id == vehicle_id
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    photo_record = db.query(BookingPhoto).filter(
+        BookingPhoto.id == photo_id,
+        BookingPhoto.booking_id == booking_id
     ).first()
-    
+
     if not photo_record:
         raise HTTPException(status_code=404, detail="Photo not found")
-    
+
     try:
-        # Remove primary flag from all other photos for this vehicle
-        db.query(VehiclePhoto).filter(
-            VehiclePhoto.vehicle_id == vehicle_id,
-            VehiclePhoto.id != photo_id
+        db.query(BookingPhoto).filter(
+            BookingPhoto.booking_id == booking_id,
+            BookingPhoto.id != photo_id
         ).update({"is_primary": False})
-        
-        # Set this photo as primary
+
         photo_record.is_primary = True
         db.commit()
-        
+
         return JSONResponse(content={
             "message": "Primary photo updated successfully",
             "photo_id": photo_id
         })
-        
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to update primary photo: {str(e)}")
 
-@router.put("/vehicles/{vehicle_id}/photos/reorder")
+
+@router.put("/bookings/{booking_id}/photos/reorder")
 async def reorder_photos(
-    vehicle_id: int,
-    photo_orders: List[dict],  # [{"photo_id": 1, "display_order": 0}, ...]
+    booking_id: int,
+    photo_orders: List[dict],
     db: Session = Depends(get_db)
 ):
-    """
-    Reorder photos for a vehicle
-    """
-    # Check if vehicle exists
-    vehicle = db.query(Vehicle).filter(Vehicle.id == vehicle_id).first()
-    if not vehicle:
-        raise HTTPException(status_code=404, detail="Vehicle not found")
-    
+    booking = db.query(Booking).filter(Booking.id == booking_id).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
     try:
         for order_data in photo_orders:
             photo_id = order_data.get("photo_id")
             display_order = order_data.get("display_order")
-            
+
             if photo_id is None or display_order is None:
                 continue
-                
-            # Update display order
-            db.query(VehiclePhoto).filter(
-                VehiclePhoto.id == photo_id,
-                VehiclePhoto.vehicle_id == vehicle_id
+
+            db.query(BookingPhoto).filter(
+                BookingPhoto.id == photo_id,
+                BookingPhoto.booking_id == booking_id
             ).update({"display_order": display_order})
-        
+
         db.commit()
-        
+
         return JSONResponse(content={
             "message": "Photo order updated successfully",
             "updated_photos": len(photo_orders)
         })
-        
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Failed to reorder photos: {str(e)}")
-
-@router.post("/upload-test")
-async def test_upload(file: UploadFile = File(...)):
-    """
-    Test endpoint for file upload functionality
-    """
-    try:
-        content = await file.read()
-        return JSONResponse(content={
-            "filename": file.filename,
-            "content_type": file.content_type,
-            "size": len(content),
-            "message": "File received successfully"
-        })
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))

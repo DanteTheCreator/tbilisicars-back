@@ -40,12 +40,20 @@ class Booking(Base, TimestampMixin):
     status: Mapped[BookingStatusEnum] = mapped_column(SAEnum(BookingStatusEnum), index=True, default=BookingStatusEnum.PENDING)
     payment_status: Mapped[PaymentStatusEnum] = mapped_column(SAEnum(PaymentStatusEnum), index=True, default=PaymentStatusEnum.UNPAID)
 
-    base_rate: Mapped[float] = mapped_column(Numeric(10, 2))
+    base_rate: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
     taxes: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
     fees: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
     discount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
-    total_amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    total_amount: Mapped[float] = mapped_column(Numeric(10, 2), default=0)
     currency: Mapped[str] = mapped_column(String(3), default="USD")
+
+    # Snapshot of contact information at time of booking (denormalized)
+    contact_first_name: Mapped[str] = mapped_column(String(100))
+    contact_last_name: Mapped[str] = mapped_column(String(100))
+    contact_email: Mapped[str] = mapped_column(String(255), index=True)
+    contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
+
+    # Amounts already present: total_amount and currency
 
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
 
@@ -59,6 +67,7 @@ class Booking(Base, TimestampMixin):
     extras: Mapped[List["BookingExtra"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     payments: Mapped[List["Payment"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     damages: Mapped[List["DamageReport"]] = relationship(back_populates="booking")
+    photos: Mapped[List["BookingPhoto"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
 
 
 class ExtraTypeEnum(str, PyEnum):

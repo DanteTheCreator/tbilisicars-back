@@ -12,6 +12,9 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.admin import Admin
+import logging
+
+logger = logging.getLogger(__name__)
 
 # Password hashing
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
@@ -59,8 +62,26 @@ def authenticate_admin(db: Session, username: str, password: str) -> Optional[Ad
     admin = db.query(Admin).filter(
         (Admin.username == username) | (Admin.email == username)
     ).first()
-    
-    if not admin or not verify_password(password, admin.hashed_password):
+    if not admin:
+        return None
+
+    # Verify password but guard against passlib/bcrypt issues that can raise
+    # ValueError (e.g. password > 72 bytes) or backend detection errors. If
+    # verification fails or raises, treat as authentication failure rather
+    # than letting an exception return a 500.
+    try:
+        ok = verify_password(password, admin.hashed_password)
+    except ValueError:
+        # Known bcrypt limitation: treat as auth failure
+        logger.debug("Password verification failed due to ValueError (possible bcrypt length limit)")
+        return None
+    except Exception:
+        # Unexpected errors should be logged and treated as auth failure to
+        # avoid exposing stack traces to clients.
+        logger.exception("Unexpected error during password verification")
+        return None
+
+    if not ok:
         return None
     
     if not admin.is_active:

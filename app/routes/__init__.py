@@ -7,8 +7,10 @@ from .auth import router as auth_router
 from .users import router as users_router
 from .locations import router as locations_router
 from .vehicles import router as vehicles_router
+from .vehicle_groups import router as vehicle_groups_router
 from .vehicle_prices import router as vehicle_prices_router
 from .vehicle_photos import router as vehicle_photos_router
+from .booking_photos import router as booking_photos_router
 from .bookings import router as bookings_router
 from .extras import router as extras_router
 from .booking_extras import router as booking_extras_router
@@ -28,9 +30,11 @@ api_router.include_router(auth_router)
 api_router.include_router(users_router)
 api_router.include_router(locations_router)
 api_router.include_router(vehicles_router)
+api_router.include_router(vehicle_groups_router)
 api_router.include_router(vehicle_prices_router)
 api_router.include_router(vehicle_photos_router)
 api_router.include_router(bookings_router)
+api_router.include_router(booking_photos_router)
 api_router.include_router(extras_router)
 api_router.include_router(booking_extras_router)
 api_router.include_router(payments_router)

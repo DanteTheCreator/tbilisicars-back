@@ -46,6 +46,7 @@ class Vehicle(Base, TimestampMixin):
     )
 
     location_id: Mapped[int | None] = mapped_column(ForeignKey("location.id", ondelete="SET NULL"), nullable=True, index=True)
+    vehicle_group_id: Mapped[int | None] = mapped_column(ForeignKey("vehiclegroup.id", ondelete="SET NULL"), nullable=True, index=True)
 
     vin: Mapped[str | None] = mapped_column(String(17), nullable=True)
     license_plate: Mapped[str] = mapped_column(String(20), index=True)
@@ -71,7 +72,9 @@ class Vehicle(Base, TimestampMixin):
     # Relations
     # Use Optional string forward ref to satisfy SQLAlchemy's de-stringifier
     location: Mapped[Optional["Location"]] = relationship(back_populates="vehicles")
+    vehicle_group: Mapped[Optional["VehicleGroup"]] = relationship(back_populates="vehicles")
     prices: Mapped[List["VehiclePrice"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")
     bookings: Mapped[List["Booking"]] = relationship(back_populates="vehicle")
     damages: Mapped[List["DamageReport"]] = relationship(back_populates="vehicle")
     documents: Mapped[List["VehicleDocument"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan")
+    photos: Mapped[List["VehiclePhoto"]] = relationship(back_populates="vehicle", cascade="all, delete-orphan", order_by="VehiclePhoto.display_order")
