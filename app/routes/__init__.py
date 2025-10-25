@@ -20,6 +20,7 @@ from .promos import router as promos_router
 from .booking_promos import router as booking_promos_router
 from .reviews import router as reviews_router
 from .documents import router as documents_router
+from .rates import router as rates_router
 from .admin_stats import router as admin_stats_router
 from .admin_reports import router as admin_reports_router
 from .admin_settings import router as admin_settings_router
@@ -43,6 +44,7 @@ api_router.include_router(promos_router)
 api_router.include_router(booking_promos_router)
 api_router.include_router(reviews_router)
 api_router.include_router(documents_router)
+api_router.include_router(rates_router)
 api_router.include_router(admin_stats_router)
 api_router.include_router(admin_reports_router)
 api_router.include_router(admin_settings_router)

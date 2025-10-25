@@ -6,6 +6,7 @@ from .vehicle_group import VehicleGroup
 from .vehicle import Vehicle
 from .vehicle_photo import VehiclePhoto
 from .pricing import VehiclePrice
+from .rate import Rate, RateTier, RateDayRange, RateHourRange, RateKmRange
 from .booking import Booking, Extra, BookingExtra
 from .payment import Payment
 from .damage import DamageReport
