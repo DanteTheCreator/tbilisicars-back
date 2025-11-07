@@ -19,6 +19,11 @@ class Settings(BaseModel):
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
 
+    # Email Monitor Settings
+    EMAIL_CHECK_INTERVAL: int = int(os.getenv("EMAIL_CHECK_INTERVAL", "300"))  # 5 minutes default
+    GMAIL_ADDRESS: str = os.getenv("GMAIL_ADDRESS", "")
+    GMAIL_APP_PASSWORD: str = os.getenv("GMAIL_APP_PASSWORD", "")
+
     @property
     def DATABASE_URL(self) -> str:
         return (

@@ -1,6 +1,7 @@
 from .base import Base
 from .user import User
 from .admin import Admin
+from .task import Task, TaskStatus, TaskPriority
 from .location import Location
 from .vehicle_group import VehicleGroup
 from .vehicle import Vehicle
@@ -14,3 +15,4 @@ from .promo import Promo, BookingPromo
 from .review import Review
 from .document import VehicleDocument
 from .booking_photo import BookingPhoto
+from .one_way_fee import OneWayFee

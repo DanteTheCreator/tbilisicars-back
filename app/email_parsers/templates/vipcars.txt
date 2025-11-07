@@ -1,0 +1,46 @@
+Dear Tbilisi Cars
+VIPCars.com
+Please hereby find a car reservation from Car Rental Company customer Mr Sanjeev Dhawan. We have assigned our own reservation number to the customer for this rental, it is G31602994 .
+
+Mr Dhawan's reservation details are:
+
+Reservation Number :	G31602994
+Vehicle Name :	IFNR (Intermediate or similar)
+Reservation Details
+Title:	Mr
+First name:	Sanjeev
+Surname:	Dhawan
+Date of birth:	
+Address:	
+City:	
+Zip:	
+Country:	India (IN)
+ 	 
+Selected car class:	IFNR
+Selected sample car type:	Mitsubishi Outlander Sport
+Pick up country:	Georgia
+Pick up location:	Tbilisi Airport (TBS)
+Pick up date:	01/11/2025, 07:00
+Drop off location:	Tbilisi Airport (TBS)
+Drop off date:	08/11/2025, 20:00
+Additional flight information (if available):
+Customer's flight number:	
+Requested extras:	
+Any additional comments by customer:	
+ 
+The sum you can charge and keep is:
+€ 329.60 
+MODIFY BOOKING REQUEST:
+ACCEPT MODIFICATION:
+https://confirm.carrentalgateway.com/?ref=Af0xyEPgrVKs8emkTbv4l9tA7mOEp-iQWdlAfR9EB4CKhAHOaP-FewLOAeI5MgOhMwQB - Accept
+
+REFUSE MODIFICATION:
+https://confirm.carrentalgateway.com/?ref=AdXG7K5vHederw7fdZIywaS4cTXRMnxNypH_OgV3Ogx2hAHOaP-FewLOAeI5MgOhMwQA - Refuse
+
+ 	
+
+For any booking related queries, you can contact us at: reservations@vipcars.com.
+
+Booking done through VIPCars.com
+This is an automated email, please do not reply.
+

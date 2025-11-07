@@ -129,18 +129,51 @@ def get_current_admin(
 
 def get_current_super_admin(current_admin: Admin = Depends(get_current_admin)) -> Admin:
     """Get current authenticated super admin."""
-    if not current_admin.is_super_admin:
+    if current_admin.admin_role != "super_admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Not enough permissions"
+            detail="Super admin privileges required"
         )
     return current_admin
+
+
+def get_current_admin_or_higher(current_admin: Admin = Depends(get_current_admin)) -> Admin:
+    """Get current authenticated admin with admin role or higher (not guest)."""
+    if current_admin.admin_role == "guest_admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required"
+        )
+    return current_admin
+
+
+def require_role(required_role: str):
+    """Require specific admin role or higher."""
+    def role_dependency(current_admin: Admin = Depends(get_current_admin)) -> Admin:
+        role_hierarchy = {
+            "guest_admin": 0,
+            "admin": 1,
+            "super_admin": 2
+        }
+        
+        if role_hierarchy.get(current_admin.admin_role, 0) < role_hierarchy.get(required_role, 0):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role required: {required_role.value}"
+            )
+        return current_admin
+    return role_dependency
 
 
 def require_permission(permission: str):
     """Decorator to require specific permission."""
     def permission_dependency(current_admin: Admin = Depends(get_current_admin)) -> Admin:
-        if not getattr(current_admin, permission, False) and not current_admin.is_super_admin:
+        # Super admins have all permissions
+        if current_admin.admin_role == "super_admin":
+            return current_admin
+        
+        # Check specific permission
+        if not getattr(current_admin, permission, False):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Permission required: {permission}"

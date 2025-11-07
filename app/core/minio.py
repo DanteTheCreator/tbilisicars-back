@@ -6,6 +6,11 @@ import io
 from PIL import Image
 import uuid
 import urllib3
+import warnings
+
+# Suppress InsecureRequestWarning globally for MinIO connections with self-signed certs
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+warnings.filterwarnings('ignore', message='Unverified HTTPS request')
 
 class MinIOClient:
     def __init__(self):
@@ -29,9 +34,14 @@ class MinIOClient:
         self.user_documents_bucket = os.getenv('MINIO_USER_DOCUMENTS_BUCKET', 'user-documents')
         
         # For HTTPS connections, disable SSL verification for internal Docker network
+        # This is acceptable for internal services with self-signed certificates
         http_client = None
         if self.secure:
-            http_client = urllib3.PoolManager(cert_reqs='CERT_NONE')
+            http_client = urllib3.PoolManager(
+                cert_reqs='CERT_NONE',
+                assert_hostname=False
+            )
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
         self.client = Minio(
             self.endpoint,
@@ -44,7 +54,11 @@ class MinIOClient:
         # Client for public URL generation - also with SSL verification disabled
         public_http_client = None
         if self.public_secure:
-            public_http_client = urllib3.PoolManager(cert_reqs='CERT_NONE')
+            public_http_client = urllib3.PoolManager(
+                cert_reqs='CERT_NONE',
+                assert_hostname=False
+            )
+            urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
         
         self.public_client = Minio(
             self.public_endpoint,

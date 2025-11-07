@@ -4,7 +4,7 @@ from typing import List, Optional
 from datetime import date
 
 from enum import Enum as PyEnum
-from sqlalchemy import String, Enum as SAEnum, Integer, ForeignKey, UniqueConstraint, Boolean, Date
+from sqlalchemy import String, Enum as SAEnum, Integer, ForeignKey, UniqueConstraint, Boolean, Date, Numeric
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -50,6 +50,7 @@ class Vehicle(Base, TimestampMixin):
 
     vin: Mapped[str | None] = mapped_column(String(17), nullable=True)
     license_plate: Mapped[str] = mapped_column(String(20), index=True)
+    tech_passport: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     make: Mapped[str] = mapped_column(String(100))
     model: Mapped[str] = mapped_column(String(100))
@@ -65,6 +66,8 @@ class Vehicle(Base, TimestampMixin):
 
     status: Mapped[VehicleStatusEnum] = mapped_column(SAEnum(VehicleStatusEnum), index=True, default=VehicleStatusEnum.AVAILABLE)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    starting_price: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True, default=50.00)
 
     registration_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)
     inspection_expiry: Mapped[date | None] = mapped_column(Date, nullable=True)

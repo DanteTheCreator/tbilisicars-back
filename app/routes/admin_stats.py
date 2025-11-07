@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_
 from datetime import datetime, timedelta
 from typing import Dict, Any
@@ -37,33 +37,54 @@ async def get_admin_stats(
             and_(
                 Booking.pickup_datetime <= now,
                 Booking.dropoff_datetime >= now,
-                Booking.status.in_(['confirmed', 'checked_out'])
+                Booking.status.in_(['CONFIRMED', 'DELIVERED'])
             )
         ).count()
         
         # Total users
         total_users = db.query(User).count()
         
-        # Monthly revenue (current month) - simplified query for now
+        # Monthly revenue (current month) - by currency
         start_of_month = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        monthly_revenue = db.query(func.sum(Payment.amount)).filter(
-            Payment.created_at >= start_of_month
-        ).scalar() or 0
+        
+        # Query revenue per currency
+        monthly_revenue_by_currency = db.query(
+            Booking.currency,
+            func.sum(Booking.total_amount)
+        ).filter(
+            Booking.created_at >= start_of_month
+        ).group_by(Booking.currency).all()
+        
+        # Create dict for monthly revenue by currency
+        monthly_revenue = {
+            'EUR': 0,
+            'USD': 0,
+            'GEL': 0
+        }
+        for currency, amount in monthly_revenue_by_currency:
+            if currency in monthly_revenue:
+                monthly_revenue[currency] = float(amount or 0)
+        
+        # Calculate total monthly revenue (for growth calculation)
+        total_monthly_revenue = sum(monthly_revenue.values())
         
         # Previous month revenue for growth calculation
         start_of_last_month = (start_of_month - timedelta(days=1)).replace(day=1)
         end_of_last_month = start_of_month - timedelta(seconds=1)
-        last_month_revenue = db.query(func.sum(Payment.amount)).filter(
+        
+        last_month_revenue_query = db.query(
+            func.sum(Booking.total_amount)
+        ).filter(
             and_(
-                Payment.created_at >= start_of_last_month,
-                Payment.created_at <= end_of_last_month
+                Booking.created_at >= start_of_last_month,
+                Booking.created_at <= end_of_last_month
             )
         ).scalar() or 0
         
         # Revenue growth percentage
         revenue_growth = 0
-        if last_month_revenue > 0:
-            revenue_growth = ((monthly_revenue - last_month_revenue) / last_month_revenue) * 100
+        if last_month_revenue_query > 0:
+            revenue_growth = ((total_monthly_revenue - float(last_month_revenue_query)) / float(last_month_revenue_query)) * 100
         
         # Bookings this week vs last week
         start_of_week = now - timedelta(days=now.weekday())
@@ -94,13 +115,25 @@ async def get_admin_stats(
             utilization_rate = (active_bookings / total_vehicles) * 100
         
         # Recent activity (last 10 bookings)
-        recent_bookings = db.query(Booking).order_by(Booking.created_at.desc()).limit(10).all()
+        recent_bookings = db.query(Booking)\
+            .options(joinedload(Booking.vehicle), joinedload(Booking.vehicle_group))\
+            .order_by(Booking.created_at.desc())\
+            .limit(10)\
+            .all()
         recent_activity = []
         for booking in recent_bookings:
+            # Handle cases where vehicle might be None
+            if booking.vehicle:
+                description = f"New booking for {booking.vehicle.make} {booking.vehicle.model}"
+            elif booking.vehicle_group:
+                description = f"New booking for {booking.vehicle_group.name}"
+            else:
+                description = f"New booking #{booking.id}"
+            
             recent_activity.append({
                 "id": booking.id,
                 "type": "booking",
-                "description": f"New booking for {booking.vehicle.make} {booking.vehicle.model}",
+                "description": description,
                 "timestamp": booking.created_at.isoformat(),
                 "status": booking.status
             })
@@ -114,7 +147,7 @@ async def get_admin_stats(
             "available_vehicles": available_vehicles,
             "active_bookings": active_bookings,
             "total_users": total_users,
-            "monthly_revenue": float(monthly_revenue),
+            "monthly_revenue": monthly_revenue,  # Already a dict with EUR, USD, GEL
             "revenue_growth": round(revenue_growth, 2),
             "booking_growth": round(booking_growth, 2),
             "utilization_rate": round(utilization_rate, 2),
@@ -124,18 +157,22 @@ async def get_admin_stats(
         }
         
     except Exception as e:
+        print(f"[ERROR] Stats endpoint error: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return {
             "error": str(e),
             "total_vehicles": 0,
             "available_vehicles": 0,
             "active_bookings": 0,
             "total_users": 0,
-            "monthly_revenue": 0,
+            "monthly_revenue": {"EUR": 0, "USD": 0, "GEL": 0},
             "revenue_growth": 0,
             "booking_growth": 0,
             "utilization_rate": 0,
             "bookings_this_week": 0,
-            "bookings_last_week": 0
+            "bookings_last_week": 0,
+            "recent_activity": []
         }
 
 @router.get("/admin/recent-activity")
@@ -162,7 +199,7 @@ async def get_recent_activity(
                 "message": f"New booking created for {booking.vehicle.make} {booking.vehicle.model}" if booking.vehicle else f"New booking created (ID: {booking.id})",
                 "timestamp": booking.created_at,
                 "user": f"{booking.user.first_name} {booking.user.last_name}" if booking.user else "Unknown",
-                "status": "success" if booking.status == "confirmed" else "info"
+                "status": "success" if booking.status.value == "CONFIRMED" else "info"
             })
         
         # Recent user registrations

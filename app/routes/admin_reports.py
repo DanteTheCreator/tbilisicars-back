@@ -36,7 +36,7 @@ async def get_reports(
         confirmed_bookings = db.query(Booking).filter(
             and_(
                 Booking.created_at >= start_date,
-                Booking.status == 'confirmed'
+                Booking.status == 'CONFIRMED'
             )
         ).count()
         

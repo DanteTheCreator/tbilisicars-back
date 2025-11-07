@@ -42,12 +42,22 @@ class AdminInfo(BaseModel):
     username: str
     email: str
     full_name: str
-    is_super_admin: bool
+    admin_role: str
+    is_active: bool
+    is_super_admin: bool  # Kept for backward compatibility
     can_manage_vehicles: bool
     can_manage_bookings: bool
     can_manage_users: bool
     can_view_reports: bool
     can_manage_settings: bool
+    can_manage_rates: bool
+    can_manage_extras: bool
+    can_manage_promotions: bool
+    can_manage_locations: bool
+    can_view_reviews: bool
+    can_manage_damages: bool
+    can_manage_tasks: bool
+    can_view_calendar: bool
     last_login: str | None
 
 
@@ -85,12 +95,22 @@ async def login(
             "username": admin.username,
             "email": admin.email,
             "full_name": admin.full_name,
+            "admin_role": admin.admin_role,
+            "is_active": admin.is_active,
             "is_super_admin": admin.is_super_admin,
             "can_manage_vehicles": admin.can_manage_vehicles,
             "can_manage_bookings": admin.can_manage_bookings,
             "can_manage_users": admin.can_manage_users,
             "can_view_reports": admin.can_view_reports,
             "can_manage_settings": admin.can_manage_settings,
+            "can_manage_rates": admin.can_manage_rates,
+            "can_manage_extras": admin.can_manage_extras,
+            "can_manage_promotions": admin.can_manage_promotions,
+            "can_manage_locations": admin.can_manage_locations,
+            "can_view_reviews": admin.can_view_reviews,
+            "can_manage_damages": admin.can_manage_damages,
+            "can_manage_tasks": admin.can_manage_tasks,
+            "can_view_calendar": admin.can_view_calendar,
             "last_login": admin.last_login.isoformat() if admin.last_login else None
         }
     )
@@ -106,12 +126,22 @@ async def get_current_user_info(
         username=current_admin.username,
         email=current_admin.email,
         full_name=current_admin.full_name,
+        admin_role=current_admin.admin_role,
+        is_active=current_admin.is_active,
         is_super_admin=current_admin.is_super_admin,
         can_manage_vehicles=current_admin.can_manage_vehicles,
         can_manage_bookings=current_admin.can_manage_bookings,
         can_manage_users=current_admin.can_manage_users,
         can_view_reports=current_admin.can_view_reports,
         can_manage_settings=current_admin.can_manage_settings,
+        can_manage_rates=current_admin.can_manage_rates,
+        can_manage_extras=current_admin.can_manage_extras,
+        can_manage_promotions=current_admin.can_manage_promotions,
+        can_manage_locations=current_admin.can_manage_locations,
+        can_view_reviews=current_admin.can_view_reviews,
+        can_manage_damages=current_admin.can_manage_damages,
+        can_manage_tasks=current_admin.can_manage_tasks,
+        can_view_calendar=current_admin.can_view_calendar,
         last_login=current_admin.last_login.isoformat() if current_admin.last_login else None
     )
 

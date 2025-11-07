@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.core.auth import get_password_hash
 from app.core.db import engine
-from app.models.admin import Admin
+from app.models.admin import Admin, AdminRole
 
 
 def create_admin_user():
@@ -49,8 +49,39 @@ def create_admin_user():
             continue
         break
     
-    # Ask about super admin privileges
-    is_super_admin = input("Make this user a super admin? (y/N): ").lower() == 'y'
+    # Ask about admin role
+    print("\nAdmin roles:")
+    print("  1. Super Admin (full system access)")
+    print("  2. Admin (standard admin privileges)")
+    print("  3. Guest Admin (limited read-only access)")
+    role_choice = input("Select role (1-3) [default: 3]: ").strip() or "3"
+    
+    role_map = {
+        "1": AdminRole.SUPER_ADMIN,
+        "2": AdminRole.ADMIN,
+        "3": AdminRole.GUEST_ADMIN
+    }
+    admin_role = role_map.get(role_choice, AdminRole.GUEST_ADMIN)
+    
+    # Set default permissions based on role
+    if admin_role == AdminRole.SUPER_ADMIN:
+        can_manage_vehicles = True
+        can_manage_bookings = True
+        can_manage_users = True
+        can_view_reports = True
+        can_manage_settings = True
+    elif admin_role == AdminRole.ADMIN:
+        can_manage_vehicles = True
+        can_manage_bookings = True
+        can_manage_users = False
+        can_view_reports = True
+        can_manage_settings = False
+    else:  # GUEST_ADMIN
+        can_manage_vehicles = False
+        can_manage_bookings = False
+        can_manage_users = False
+        can_view_reports = True
+        can_manage_settings = False
     
     # Create database session
     with Session(engine) as db:
@@ -69,19 +100,20 @@ def create_admin_user():
             email=email,
             full_name=full_name,
             hashed_password=get_password_hash(password),
-            is_super_admin=is_super_admin,
-            can_manage_vehicles=True,
-            can_manage_bookings=True,
-            can_manage_users=is_super_admin,
-            can_view_reports=True,
-            can_manage_settings=is_super_admin,
+            admin_role=admin_role,
+            is_super_admin=(admin_role == AdminRole.SUPER_ADMIN),  # For backward compatibility
+            can_manage_vehicles=can_manage_vehicles,
+            can_manage_bookings=can_manage_bookings,
+            can_manage_users=can_manage_users,
+            can_view_reports=can_view_reports,
+            can_manage_settings=can_manage_settings,
         )
         
         db.add(admin)
         db.commit()
         
         print(f"\nAdmin user '{username}' created successfully!")
-        print(f"Super admin: {'Yes' if is_super_admin else 'No'}")
+        print(f"Role: {admin_role.value}")
         print("\nPermissions:")
         print(f"  - Manage Vehicles: {'Yes' if admin.can_manage_vehicles else 'No'}")
         print(f"  - Manage Bookings: {'Yes' if admin.can_manage_bookings else 'No'}")

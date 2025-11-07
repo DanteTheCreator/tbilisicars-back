@@ -48,6 +48,10 @@ class VehicleGroup(Base, TimestampMixin):
         cascade="all, delete-orphan",
         passive_deletes=True
     )
+    promos: Mapped[List["Promo"]] = relationship(
+        back_populates="vehicle_group",
+        foreign_keys="[Promo.vehicle_group_id]"
+    )
     
     def __repr__(self) -> str:
         return f"<VehicleGroup(id={self.id}, name='{self.name}', category='{self.category}')>"

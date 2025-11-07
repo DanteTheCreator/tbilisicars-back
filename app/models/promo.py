@@ -11,14 +11,16 @@ from .base import Base, TimestampMixin
 
 
 class DiscountTypeEnum(str, PyEnum):
-    PERCENT = "percent"
-    FIXED = "fixed"
+    PERCENT = "PERCENT"
+    FIXED = "FIXED"
 
 
 class Promo(Base, TimestampMixin):
-    code: Mapped[str] = mapped_column(String(50), unique=True, index=True)
     name: Mapped[str] = mapped_column(String(150))
     description: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+
+    # Link to vehicle group
+    vehicle_group_id: Mapped[int | None] = mapped_column(ForeignKey("vehiclegroup.id", ondelete="CASCADE"), nullable=True, index=True)
 
     discount_type: Mapped[DiscountTypeEnum] = mapped_column(SAEnum(DiscountTypeEnum))
     value: Mapped[float] = mapped_column(Numeric(10, 2))
@@ -31,7 +33,8 @@ class Promo(Base, TimestampMixin):
     max_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
-    # simple link to bookings (applied promo code)
+    # Relations
+    vehicle_group: Mapped["VehicleGroup"] = relationship(back_populates="promos", foreign_keys=[vehicle_group_id])
     bookings: Mapped[List["BookingPromo"]] = relationship(back_populates="promo", cascade="all, delete-orphan")
 
 

@@ -24,4 +24,7 @@ def apply_updates(obj: Base, payload: Dict[str, Any]) -> None:
     cols = {c.name for c in obj.__table__.columns}  # type: ignore[attr-defined]
     for k, v in payload.items():
         if k in cols:
+            # Convert status and payment_status to uppercase for enum compatibility
+            if k in ('status', 'payment_status') and isinstance(v, str):
+                v = v.upper()
             setattr(obj, k, v)

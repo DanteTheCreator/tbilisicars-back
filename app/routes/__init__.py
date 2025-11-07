@@ -24,6 +24,11 @@ from .rates import router as rates_router
 from .admin_stats import router as admin_stats_router
 from .admin_reports import router as admin_reports_router
 from .admin_settings import router as admin_settings_router
+from .admin_management import router as admin_management_router
+from .one_way_fees import router as one_way_fees_router
+from .booking_emails import router as booking_emails_router
+from .email_bookings import router as email_bookings_router
+from .tasks import router as tasks_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -48,3 +53,7 @@ api_router.include_router(rates_router)
 api_router.include_router(admin_stats_router)
 api_router.include_router(admin_reports_router)
 api_router.include_router(admin_settings_router)
+api_router.include_router(admin_management_router)
+api_router.include_router(one_way_fees_router)
+api_router.include_router(email_bookings_router)
+api_router.include_router(tasks_router)

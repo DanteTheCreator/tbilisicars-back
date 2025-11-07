@@ -1,0 +1,26 @@
+
+Dear partner,
+We have a new booking for you.
+Please confirm this booking, with the below details, using the correspondent link.
+Supplier	Tbilisicars
+Package code	Inclusive POA
+Discover Cars booking number	D012182965-42RR
+Pick-up	Georgia, Batumi, Downtown, 28 Oct 2025, 18:00 Delivery only Hotel Delivery Within City Limits
+Pick-up Instructions	Our manager will be in contact via WhatsApp(or other) 2-3 days before pick up.
+Drop-off	Georgia, Batumi, Downtown, 31 Oct 2025, 18:00 Delivery only Hotel Delivery Within City Limits
+Drop-off Instructions	Rental representative will be in contact with customer whole rental period for about any information.
+Supplier vehicle group	CDAH
+Vehicle class	Compact
+Vehicle class sample	Toyota Prius or similar
+Vehicle SIPP code	CDAH
+Driver name	Ido Ofir
+Date of birth	6 Mar 1981
+Residency country	Israel
+Voucher value	82.24 EUR
+Deposit	100.00 EUR
+Fuel policy	Same to same
+Click on this link to accept this reservation: Open reservation
+In case of any urgent questions please contact us by email, phone or live chat on our web page.
+All the best,
+Customer Support Department
+Discover Cars
