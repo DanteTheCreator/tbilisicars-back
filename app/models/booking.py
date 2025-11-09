@@ -23,6 +23,8 @@ class PaymentStatusEnum(str, PyEnum):
     UNPAID = "UNPAID"
     AUTHORIZED = "AUTHORIZED"
     PARTIAL = "PARTIAL"
+    HALF = "HALF"
+    PREPAID = "PREPAID"
     PAID = "PAID"
     REFUNDED = "REFUNDED"
 

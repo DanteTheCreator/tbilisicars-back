@@ -360,7 +360,7 @@ async def list_admins_for_assignment(
             "id": admin.id,
             "username": admin.username,
             "full_name": admin.full_name,
-            "admin_role": admin.admin_role.value
+            "admin_role": admin.admin_role.value if hasattr(admin.admin_role, 'value') else admin.admin_role
         }
         for admin in admins
     ]
