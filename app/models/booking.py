@@ -21,10 +21,7 @@ class BookingStatusEnum(str, PyEnum):
 
 class PaymentStatusEnum(str, PyEnum):
     UNPAID = "UNPAID"
-    AUTHORIZED = "AUTHORIZED"
-    PARTIAL = "PARTIAL"
     HALF = "HALF"
-    PREPAID = "PREPAID"
     PAID = "PAID"
     REFUNDED = "REFUNDED"
 
@@ -86,15 +83,16 @@ class Booking(Base, TimestampMixin):
     payments: Mapped[List["Payment"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
     damages: Mapped[List["DamageReport"]] = relationship(back_populates="booking")
     photos: Mapped[List["BookingPhoto"]] = relationship(back_populates="booking", cascade="all, delete-orphan")
+    history: Mapped[List["BookingHistory"]] = relationship(back_populates="booking", cascade="all, delete-orphan", order_by="BookingHistory.changed_at.desc()")
 
 
 class ExtraTypeEnum(str, PyEnum):
-    GPS = "gps"
-    CHILD_SEAT = "child_seat"
-    EXTRA_DRIVER = "extra_driver"
-    ROOF_RACK = "roof_rack"
-    WIFI = "wifi"
-    SNOW_CHAINS = "snow_chains"
+    GPS = "GPS"
+    CHILD_SEAT = "CHILD_SEAT"
+    EXTRA_DRIVER = "EXTRA_DRIVER"
+    ROOF_RACK = "ROOF_RACK"
+    WIFI = "WIFI"
+    SNOW_CHAINS = "SNOW_CHAINS"
 
 
 class Extra(Base, TimestampMixin):

@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_
 
 from app.models.booking import Booking, Extra, BookingExtra
+from app.models.booking_history import BookingHistory
 from app.models.user import User
 from app.models.one_way_fee import OneWayFee
 from app.models.location import Location
@@ -152,6 +153,30 @@ def _calculate_one_way_fee(db: Session, pickup_location_id: int, dropoff_locatio
             return float(fee.fee_amount)
     
     return 0.0
+
+
+def _create_history_entry(
+    db: Session,
+    booking_id: int,
+    action_type: str,
+    field_name: str | None = None,
+    old_value: str | None = None,
+    new_value: str | None = None,
+    description: str | None = None,
+    changed_by_id: int | None = None
+) -> None:
+    """Create a booking history entry"""
+    history = BookingHistory(
+        booking_id=booking_id,
+        changed_by_id=changed_by_id,
+        action_type=action_type,
+        field_name=field_name,
+        old_value=old_value,
+        new_value=new_value,
+        description=description
+    )
+    db.add(history)
+    db.flush()
 
 
 def _calculate_delivery_fee(db: Session, vehicle_id: int, pickup_location_id: int) -> float:
@@ -330,6 +355,47 @@ def get_booking(item_id: int, db: Session = Depends(get_db)):
     return to_dict(obj)
 
 
+@router.get("/{item_id}/history", response_model=List[Dict[str, Any]])
+def get_booking_history(item_id: int, db: Session = Depends(get_db)):
+    """Get all history entries for a booking"""
+    # Verify booking exists
+    booking = db.get(Booking, item_id)
+    if not booking:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+    
+    # Query history with admin details
+    history_entries = db.query(BookingHistory).filter(
+        BookingHistory.booking_id == item_id
+    ).order_by(BookingHistory.changed_at.desc()).all()
+    
+    result = []
+    for entry in history_entries:
+        entry_dict = {
+            'id': entry.id,
+            'booking_id': entry.booking_id,
+            'changed_at': entry.changed_at.isoformat() if entry.changed_at else None,
+            'action_type': entry.action_type,
+            'field_name': entry.field_name,
+            'old_value': entry.old_value,
+            'new_value': entry.new_value,
+            'description': entry.description,
+            'changed_by': None
+        }
+        
+        if entry.changed_by:
+            entry_dict['changed_by'] = {
+                'id': entry.changed_by.id,
+                'username': entry.changed_by.username,
+                'email': entry.changed_by.email,
+                'first_name': entry.changed_by.first_name,
+                'last_name': entry.changed_by.last_name
+            }
+        
+        result.append(entry_dict)
+    
+    return result
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
 async def create_booking(request: Request, db: Session = Depends(get_db)):
     # Check content type to provide better error message
@@ -418,6 +484,16 @@ async def create_booking(request: Request, db: Session = Depends(get_db)):
     db.add(obj)
     try:
         db.commit()
+        db.refresh(obj)
+        
+        # Create initial history entry for booking creation
+        _create_history_entry(
+            db=db,
+            booking_id=obj.id,
+            action_type="CREATED",
+            description=f"Booking created with status {obj.status}"
+        )
+        db.commit()
     except IntegrityError as e:
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e.orig) if getattr(e, "orig", None) else str(e))
@@ -435,6 +511,28 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
     if any(k in payload for k in contact_keys):
         _validate_contact_payload(payload, required=False)
 
+    # Track changes for history
+    tracked_fields = {
+        'status': 'Booking Status',
+        'payment_status': 'Payment Status',
+        'vehicle_id': 'Vehicle',
+        'vehicle_group_id': 'Vehicle Group',
+        'pickup_location_id': 'Pickup Location',
+        'dropoff_location_id': 'Dropoff Location',
+        'pickup_datetime': 'Pickup Date/Time',
+        'dropoff_datetime': 'Dropoff Date/Time',
+        'total_amount': 'Total Amount',
+        'broker': 'Broker'
+    }
+    
+    changes = []
+    for field, label in tracked_fields.items():
+        if field in payload:
+            old_val = getattr(obj, field, None)
+            new_val = payload[field]
+            if str(old_val) != str(new_val):
+                changes.append((field, label, str(old_val) if old_val is not None else None, str(new_val) if new_val is not None else None))
+
     apply_updates(obj, payload)
     
     # Recalculate one-way fee if locations changed
@@ -442,6 +540,18 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
         if obj.pickup_location_id and obj.dropoff_location_id:
             one_way_fee = _calculate_one_way_fee(db, obj.pickup_location_id, obj.dropoff_location_id)
             obj.one_way_fee = one_way_fee
+    
+    # Create history entries for changes
+    for field, label, old_val, new_val in changes:
+        _create_history_entry(
+            db=db,
+            booking_id=item_id,
+            action_type="FIELD_UPDATED",
+            field_name=field,
+            old_value=old_val,
+            new_value=new_val,
+            description=f"{label} changed from '{old_val}' to '{new_val}'"
+        )
     
     try:
         db.commit()
@@ -463,6 +573,28 @@ def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = 
     if any(k in payload for k in contact_keys):
         _validate_contact_payload(payload, required=False)
 
+    # Track changes for history
+    tracked_fields = {
+        'status': 'Booking Status',
+        'payment_status': 'Payment Status',
+        'vehicle_id': 'Vehicle',
+        'vehicle_group_id': 'Vehicle Group',
+        'pickup_location_id': 'Pickup Location',
+        'dropoff_location_id': 'Dropoff Location',
+        'pickup_datetime': 'Pickup Date/Time',
+        'dropoff_datetime': 'Dropoff Date/Time',
+        'total_amount': 'Total Amount',
+        'broker': 'Broker'
+    }
+    
+    changes = []
+    for field, label in tracked_fields.items():
+        if field in payload:
+            old_val = getattr(obj, field, None)
+            new_val = payload[field]
+            if str(old_val) != str(new_val):
+                changes.append((field, label, str(old_val) if old_val is not None else None, str(new_val) if new_val is not None else None))
+
     apply_updates(obj, payload)
     
     # Recalculate one-way fee if locations changed
@@ -470,6 +602,18 @@ def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = 
         if obj.pickup_location_id and obj.dropoff_location_id:
             one_way_fee = _calculate_one_way_fee(db, obj.pickup_location_id, obj.dropoff_location_id)
             obj.one_way_fee = one_way_fee
+    
+    # Create history entries for changes
+    for field, label, old_val, new_val in changes:
+        _create_history_entry(
+            db=db,
+            booking_id=item_id,
+            action_type="FIELD_UPDATED",
+            field_name=field,
+            old_value=old_val,
+            new_value=new_val,
+            description=f"{label} changed from '{old_val}' to '{new_val}'"
+        )
     
     try:
         db.commit()

@@ -8,10 +8,10 @@ from .base import Base, TimestampMixin
 
 
 class DocumentTypeEnum(str, PyEnum):
-    REGISTRATION = "registration"
-    INSURANCE = "insurance"
-    INSPECTION = "inspection"
-    OTHER = "other"
+    REGISTRATION = "REGISTRATION"
+    INSURANCE = "INSURANCE"
+    INSPECTION = "INSPECTION"
+    OTHER = "OTHER"
 
 
 class VehicleDocument(Base, TimestampMixin):

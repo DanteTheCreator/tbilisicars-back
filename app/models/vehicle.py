@@ -11,32 +11,36 @@ from .base import Base, TimestampMixin
 
 
 class VehicleStatusEnum(str, PyEnum):
-    AVAILABLE = "available"
-    RESERVED = "reserved"
-    OUT_OF_SERVICE = "out_of_service"
+    AVAILABLE = "AVAILABLE"
+    RESERVED = "RESERVED"
+    OUT_OF_SERVICE = "OUT_OF_SERVICE"
+    IN_MAINTENANCE = "IN_MAINTENANCE"
 
 
 class FuelTypeEnum(str, PyEnum):
-    GASOLINE = "gasoline"
-    DIESEL = "diesel"
-    HYBRID = "hybrid"
-    ELECTRIC = "electric"
+    GASOLINE = "GASOLINE"
+    DIESEL = "DIESEL"
+    HYBRID = "HYBRID"
+    ELECTRIC = "ELECTRIC"
 
 
 class TransmissionEnum(str, PyEnum):
-    MANUAL = "manual"
-    AUTOMATIC = "automatic"
+    MANUAL = "MANUAL"
+    AUTOMATIC = "AUTOMATIC"
 
 
 class VehicleClassEnum(str, PyEnum):
-    ECONOMY = "economy"
-    COMPACT = "compact"
-    MIDSIZE = "midsize"
-    FULLSIZE = "fullsize"
-    LUXURY = "luxury"
-    SUV = "suv"
-    VAN = "van"
-    TRUCK = "truck"
+    ECONOMY = "ECONOMY"
+    COMPACT = "COMPACT"
+    MIDSIZE = "MIDSIZE"
+    STANDARD = "STANDARD"
+    FULLSIZE = "FULLSIZE"
+    PREMIUM = "PREMIUM"
+    LUXURY = "LUXURY"
+    SUV = "SUV"
+    MINIVAN = "MINIVAN"
+    VAN = "VAN"
+    TRUCK = "TRUCK"
 
 
 class Vehicle(Base, TimestampMixin):

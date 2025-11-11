@@ -28,7 +28,7 @@ async def get_admin_stats(
         
         # Available vehicles
         available_vehicles = db.query(Vehicle).filter(
-            Vehicle.status == 'available'
+            Vehicle.status == 'AVAILABLE'
         ).count()
         
                 # Active bookings (current)

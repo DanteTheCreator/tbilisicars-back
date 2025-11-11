@@ -18,12 +18,12 @@ class CurrencyEnum(str, PyEnum):
 
 
 class PriceTypeEnum(str, PyEnum):
-    BASE_DAILY = "base_daily"
-    WEEKLY = "weekly"
-    MONTHLY = "monthly"
-    WEEKEND = "weekend"
-    SEASONAL = "seasonal"
-    ONE_WAY_FEE = "one_way_fee"
+    BASE_DAILY = "BASE_DAILY"
+    WEEKLY = "WEEKLY"
+    MONTHLY = "MONTHLY"
+    WEEKEND = "WEEKEND"
+    SEASONAL = "SEASONAL"
+    ONE_WAY_FEE = "ONE_WAY_FEE"
 
 
 class VehiclePrice(Base, TimestampMixin):

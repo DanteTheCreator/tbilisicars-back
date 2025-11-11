@@ -10,19 +10,18 @@ from .base import Base, TimestampMixin
 
 
 class PaymentMethodEnum(str, PyEnum):
-    CARD = "card"
-    CASH = "cash"
-    BANK_TRANSFER = "bank_transfer"
-    STRIPE = "stripe"
-    PAYPAL = "paypal"
+    CARD = "CARD"
+    CASH = "CASH"
+    BANK_TRANSFER = "BANK_TRANSFER"
+    STRIPE = "STRIPE"
+    PAYPAL = "PAYPAL"
 
 
 class PaymentStatusEnum(str, PyEnum):
-    PENDING = "pending"
-    AUTHORIZED = "authorized"
-    CAPTURED = "captured"
-    FAILED = "failed"
-    REFUNDED = "refunded"
+    UNPAID = "UNPAID"
+    HALF = "HALF"
+    PAID = "PAID"
+    REFUNDED = "REFUNDED"
 
 
 class Payment(Base, TimestampMixin):

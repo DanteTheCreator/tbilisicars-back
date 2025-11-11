@@ -12,9 +12,9 @@ from .booking import Booking
 
 
 class DamageSeverityEnum(str, PyEnum):
-    MINOR = "minor"
-    MODERATE = "moderate"
-    MAJOR = "major"
+    MINOR = "MINOR"
+    MODERATE = "MODERATE"
+    MAJOR = "MAJOR"
 
 
 class DamageReport(Base, TimestampMixin):
