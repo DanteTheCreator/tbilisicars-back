@@ -16,6 +16,8 @@ if TYPE_CHECKING:
 class BookingHistory(Base, TimestampMixin):
     """Track all changes to bookings for audit trail"""
     
+    __tablename__ = "booking_history"
+    
     booking_id: Mapped[int] = mapped_column(ForeignKey("booking.id", ondelete="CASCADE"), index=True)
     changed_by_id: Mapped[int | None] = mapped_column(ForeignKey("admins.id", ondelete="SET NULL"), nullable=True)
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, index=True)

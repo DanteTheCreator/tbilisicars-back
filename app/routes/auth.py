@@ -27,7 +27,8 @@ settings = get_settings()
 
 
 class LoginRequest(BaseModel):
-    username: str
+    username: str | None = None
+    email: str | None = None  # Allow email as alternative to username
     password: str
 
 
@@ -72,7 +73,15 @@ async def login(
     db: Session = Depends(get_db)
 ):
     """Admin login endpoint."""
-    admin = authenticate_admin(db, request.username, request.password)
+    # Accept either username or email
+    username_or_email = request.username or request.email
+    if not username_or_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Either username or email must be provided"
+        )
+    
+    admin = authenticate_admin(db, username_or_email, request.password)
     
     if not admin:
         raise HTTPException(

@@ -20,7 +20,7 @@ import re
 
 
 def _find_or_create_user(db: Session, contact_email: str | None, contact_phone: str | None, 
-                         contact_first_name: str, contact_last_name: str) -> User:
+                         contact_full_name: str) -> User:
     """
     Find an existing user by email or phone, or create a new guest user.
     Users are matched by email first (if provided), then by phone if email doesn't match.
@@ -33,6 +33,11 @@ def _find_or_create_user(db: Session, contact_email: str | None, contact_phone: 
     contact_email = contact_email if contact_email else None  # Convert empty string to None
     contact_phone = contact_phone.strip() if contact_phone else None
     contact_phone = contact_phone if contact_phone else None  # Convert empty string to None
+    
+    # Split full name into first and last for user model
+    name_parts = contact_full_name.strip().split(maxsplit=1)
+    first_name = name_parts[0] if name_parts else "Guest"
+    last_name = name_parts[1] if len(name_parts) > 1 else ""
     
     # Try to find user by email if provided
     if contact_email:
@@ -62,8 +67,8 @@ def _find_or_create_user(db: Session, contact_email: str | None, contact_phone: 
                 user_email = f"guest_{int(datetime.utcnow().timestamp())}@tbilisicars.local"
         
         user = User(
-            first_name=contact_first_name,
-            last_name=contact_last_name,
+            first_name=first_name,
+            last_name=last_name,
             email=user_email,
             phone=contact_phone,
             hashed_password=None,  # Guest users don't have passwords
@@ -74,9 +79,9 @@ def _find_or_create_user(db: Session, contact_email: str | None, contact_phone: 
         db.flush()  # Get the user ID without committing yet
     else:
         # Update user info if it changed
-        if user.first_name != contact_first_name or user.last_name != contact_last_name:
-            user.first_name = contact_first_name
-            user.last_name = contact_last_name
+        if user.first_name != first_name or user.last_name != last_name:
+            user.first_name = first_name
+            user.last_name = last_name
         if contact_phone and user.phone != contact_phone:
             user.phone = contact_phone
         if contact_email and user.email != contact_email:
@@ -88,36 +93,31 @@ def _find_or_create_user(db: Session, contact_email: str | None, contact_phone: 
 def _validate_contact_payload(payload: dict, required: bool = False) -> None:
     """Validate contact fields in payload.
 
-    - If required=True, must include contact_first_name and contact_last_name (email is optional).
+    - If required=True, must include contact_full_name (email is optional).
     - If email present, perform simple regex validation.
     Raises HTTPException(400) on invalid input.
     """
     from fastapi import HTTPException, status
 
     email = payload.get("contact_email", "").strip()
-    first = payload.get("contact_first_name", "").strip()
-    last = payload.get("contact_last_name", "").strip()
+    full_name = payload.get("contact_full_name", "").strip()
 
     if required:
         missing = []
-        if not first:
-            missing.append("contact_first_name")
-        if not last:
-            missing.append("contact_last_name")
+        if not full_name:
+            missing.append("contact_full_name")
         if missing:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail={"missing_fields": missing})
 
     # Basic email validation if provided and not empty
-    if email:
-        # simple regex; not exhaustive but sufficient for basic validation
-        if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid contact_email format")
+    # Allow any email format since some users don't have email and we input placeholders
+    # if email:
+    #     if not re.match(r"^[^@\s]+@[^@\s]+$", email):
+    #         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid contact_email format")
 
     # Basic length checks
-    if first and len(first) > 100:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contact_first_name too long")
-    if last and len(last) > 100:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contact_last_name too long")
+    if full_name and len(full_name) > 200:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contact_full_name too long")
     if payload.get("contact_phone") and len(payload.get("contact_phone")) > 50:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="contact_phone too long")
 
@@ -433,8 +433,7 @@ async def create_booking(request: Request, db: Session = Depends(get_db)):
             db=db,
             contact_email=payload.get('contact_email'),
             contact_phone=payload.get('contact_phone'),
-            contact_first_name=payload['contact_first_name'],
-            contact_last_name=payload['contact_last_name']
+            contact_full_name=payload['contact_full_name']
         )
         print(f"[DEBUG] User created/found with id={user.id}")
 
@@ -507,7 +506,7 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     # If contact fields are supplied, validate them (not required on update)
-    contact_keys = {"contact_first_name", "contact_last_name", "contact_email", "contact_phone"}
+    contact_keys = {"contact_full_name", "contact_email", "contact_phone"}
     if any(k in payload for k in contact_keys):
         _validate_contact_payload(payload, required=False)
 
@@ -569,7 +568,7 @@ def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = 
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     # If contact fields are supplied, validate them (not required on update)
-    contact_keys = {"contact_first_name", "contact_last_name", "contact_email", "contact_phone"}
+    contact_keys = {"contact_full_name", "contact_email", "contact_phone"}
     if any(k in payload for k in contact_keys):
         _validate_contact_payload(payload, required=False)
 

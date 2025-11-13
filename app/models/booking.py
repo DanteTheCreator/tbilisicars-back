@@ -56,8 +56,7 @@ class Booking(Base, TimestampMixin):
     currency: Mapped[str] = mapped_column(String(3), default="USD")
 
     # Snapshot of contact information at time of booking (denormalized)
-    contact_first_name: Mapped[str] = mapped_column(String(100))
-    contact_last_name: Mapped[str] = mapped_column(String(100))
+    contact_full_name: Mapped[str] = mapped_column(String(200))
     contact_email: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
     
