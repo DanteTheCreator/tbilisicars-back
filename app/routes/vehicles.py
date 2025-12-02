@@ -103,7 +103,7 @@ def get_vehicle(item_id: int, db: Session = Depends(get_db)):
     else:
         vehicle_dict['photos'] = []
     
-    # Add vehicle group pricing information
+    # Add vehicle group pricing information and features
     if obj.vehicle_group:
         vehicle_dict['vehicle_group_name'] = obj.vehicle_group.name
         vehicle_dict['vehicle_group_id'] = obj.vehicle_group.id
@@ -111,6 +111,12 @@ def get_vehicle(item_id: int, db: Session = Depends(get_db)):
         if obj.vehicle_group.base_price_per_day is not None:
             if obj.starting_price is None or obj.starting_price == 50.00:  # 50.00 is the default
                 vehicle_dict['starting_price'] = float(obj.vehicle_group.base_price_per_day)
+        # Include vehicle group features
+        if obj.vehicle_group.features:
+            vehicle_dict['features'] = [f.strip() for f in obj.vehicle_group.features.split(',') if f.strip()]
+        # Include vehicle group description as fallback
+        if not obj.description and obj.vehicle_group.description:
+            vehicle_dict['description'] = obj.vehicle_group.description
     
     return vehicle_dict
 

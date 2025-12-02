@@ -53,18 +53,8 @@ def _find_or_create_user(db: Session, contact_email: str | None, contact_phone: 
     
     # Create new user if not found
     if not user:
-        # For new users, use email if provided, otherwise use a placeholder
-        # based on phone or a timestamp
-        user_email = contact_email
-        if not user_email:
-            # If no email, create a placeholder email using phone or timestamp
-            if contact_phone:
-                # Use phone-based email
-                user_email = f"guest_{contact_phone.replace('+', '').replace(' ', '')}@tbilisicars.local"
-            else:
-                # Use timestamp-based email as last resort
-                from datetime import datetime
-                user_email = f"guest_{int(datetime.utcnow().timestamp())}@tbilisicars.local"
+        # For new users, use email if provided, otherwise leave it as None
+        user_email = contact_email if contact_email else None
         
         user = User(
             first_name=first_name,
