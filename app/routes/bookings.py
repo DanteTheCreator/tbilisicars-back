@@ -339,10 +339,39 @@ def list_bookings(db: Session = Depends(get_db), skip: int = Query(0, ge=0), lim
 
 @router.get("/{item_id}", response_model=Dict[str, Any])
 def get_booking(item_id: int, db: Session = Depends(get_db)):
-    obj = db.get(Booking, item_id)
+    obj = db.query(Booking).options(
+        joinedload(Booking.pickup_location),
+        joinedload(Booking.dropoff_location),
+        joinedload(Booking.vehicle),
+        joinedload(Booking.vehicle_group)
+    ).filter(Booking.id == item_id).first()
+    
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
-    return to_dict(obj)
+    
+    booking_dict = to_dict(obj)
+    
+    # Add location names
+    if obj.pickup_location:
+        booking_dict['pickup_location_name'] = obj.pickup_location.name
+        if obj.pickup_location.city:
+            booking_dict['pickup_location_name'] = f"{obj.pickup_location.name}, {obj.pickup_location.city}"
+    
+    if obj.dropoff_location:
+        booking_dict['dropoff_location_name'] = obj.dropoff_location.name
+        if obj.dropoff_location.city:
+            booking_dict['dropoff_location_name'] = f"{obj.dropoff_location.name}, {obj.dropoff_location.city}"
+    
+    # Add vehicle info
+    if obj.vehicle:
+        booking_dict['vehicle_name'] = f"{obj.vehicle.make} {obj.vehicle.model} ({obj.vehicle.year})"
+        booking_dict['vehicle_license_plate'] = obj.vehicle.license_plate
+    
+    # Add vehicle group name
+    if obj.vehicle_group:
+        booking_dict['vehicle_group_name'] = obj.vehicle_group.name
+    
+    return booking_dict
 
 
 @router.get("/{item_id}/history", response_model=List[Dict[str, Any]])

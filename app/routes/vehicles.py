@@ -114,8 +114,8 @@ def get_vehicle(item_id: int, db: Session = Depends(get_db)):
         # Include vehicle group features
         if obj.vehicle_group.features:
             vehicle_dict['features'] = [f.strip() for f in obj.vehicle_group.features.split(',') if f.strip()]
-        # Include vehicle group description as fallback
-        if not obj.description and obj.vehicle_group.description:
+        # Include vehicle group description as fallback (Vehicle model doesn't have description)
+        if obj.vehicle_group.description:
             vehicle_dict['description'] = obj.vehicle_group.description
     
     return vehicle_dict

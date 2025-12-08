@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date
 from typing import List
 
-from sqlalchemy import String, Boolean, Date, UniqueConstraint
+from sqlalchemy import String, Boolean, Date, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -11,12 +11,13 @@ from .base import Base, TimestampMixin
 
 class User(Base, TimestampMixin):
     __table_args__ = (
-        UniqueConstraint("email", name="uq_user_email"),
+        # Partial unique index: only enforce uniqueness for non-null emails
+        Index("uq_user_email", "email", unique=True, postgresql_where="email IS NOT NULL"),
     )
 
     first_name: Mapped[str] = mapped_column(String(100))
     last_name: Mapped[str] = mapped_column(String(100))
-    email: Mapped[str] = mapped_column(String(255), index=True)
+    email: Mapped[str | None] = mapped_column(String(255), index=True, nullable=True)
     phone: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
 
     # Auth (optional - only for admin users)
