@@ -62,6 +62,7 @@ class Booking(Base, TimestampMixin):
     
     # Broker information for bookings from partners (Discover Cars, VIPCars, etc.)
     broker: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)
+    broker_id: Mapped[str | None] = mapped_column(String(100), nullable=True, index=True)  # External booking ID from broker
 
     # Amounts already present: total_amount and currency
 

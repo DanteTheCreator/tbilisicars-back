@@ -132,11 +132,19 @@ class MinIOClient:
         file.seek(0)
         image = Image.open(file)
         
-        # Convert RGBA to RGB if necessary
+        # Convert RGBA/P to RGB with white background for all formats
         if image.mode in ('RGBA', 'LA', 'P'):
             background = Image.new('RGB', image.size, (255, 255, 255))
-            background.paste(image, mask=image.split()[-1] if image.mode == 'RGBA' else None)
+            if image.mode == 'RGBA':
+                background.paste(image, mask=image.split()[3])
+            elif image.mode == 'P' and 'transparency' in image.info:
+                image = image.convert('RGBA')
+                background.paste(image, mask=image.split()[3])
+            else:
+                background.paste(image)
             image = background
+        elif image.mode != 'RGB':
+            image = image.convert('RGB')
         
         # Resize if too large (max width 1200px)
         max_width = 1200
@@ -150,7 +158,8 @@ class MinIOClient:
         if file_extension.lower() in ['jpg', 'jpeg']:
             image.save(output, format='JPEG', quality=85, optimize=True)
         elif file_extension.lower() == 'png':
-            image.save(output, format='PNG', optimize=True)
+            # Save as JPEG for smaller file size (since we have white bg anyway)
+            image.save(output, format='JPEG', quality=90, optimize=True)
         elif file_extension.lower() == 'webp':
             image.save(output, format='WEBP', quality=85, optimize=True)
         else:

@@ -147,6 +147,33 @@ def get_current_admin_or_higher(current_admin: Admin = Depends(get_current_admin
     return current_admin
 
 
+def get_optional_admin(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(HTTPBearer(auto_error=False)),
+    db: Session = Depends(get_db)
+) -> Optional[Admin]:
+    """Get current authenticated admin from JWT token, or None if not authenticated."""
+    if credentials is None:
+        return None
+    
+    try:
+        payload = verify_token(credentials.credentials)
+        if payload is None:
+            return None
+        
+        admin_id_str = payload.get("sub")
+        if admin_id_str is None:
+            return None
+        
+        admin_id = int(admin_id_str)
+        admin = db.query(Admin).filter(Admin.id == admin_id).first()
+        if admin is None or not admin.is_active:
+            return None
+        
+        return admin
+    except (JWTError, ValueError, TypeError):
+        return None
+
+
 def require_role(required_role: str):
     """Require specific admin role or higher."""
     def role_dependency(current_admin: Admin = Depends(get_current_admin)) -> Admin:

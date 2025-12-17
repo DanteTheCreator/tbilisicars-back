@@ -15,6 +15,8 @@ from app.models.one_way_fee import OneWayFee
 from app.models.location import Location
 from app.models.vehicle import Vehicle
 from app.models.rate import Rate, RateTier
+from app.models.admin import Admin
+from app.core.auth import get_optional_admin
 from .utils import get_db, to_dict, apply_updates
 import re
 
@@ -406,8 +408,7 @@ def get_booking_history(item_id: int, db: Session = Depends(get_db)):
                 'id': entry.changed_by.id,
                 'username': entry.changed_by.username,
                 'email': entry.changed_by.email,
-                'first_name': entry.changed_by.first_name,
-                'last_name': entry.changed_by.last_name
+                'full_name': entry.changed_by.full_name
             }
         
         result.append(entry_dict)
@@ -416,7 +417,11 @@ def get_booking_history(item_id: int, db: Session = Depends(get_db)):
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
-async def create_booking(request: Request, db: Session = Depends(get_db)):
+async def create_booking(
+    request: Request, 
+    db: Session = Depends(get_db),
+    current_admin: Optional[Admin] = Depends(get_optional_admin)
+):
     # Check content type to provide better error message
     content_type = request.headers.get("content-type", "")
     if "multipart/form-data" in content_type:
@@ -505,11 +510,14 @@ async def create_booking(request: Request, db: Session = Depends(get_db)):
         db.refresh(obj)
         
         # Create initial history entry for booking creation
+        status_display = _format_value_for_history(obj.status)
+        admin_id = current_admin.id if current_admin else None
         _create_history_entry(
             db=db,
             booking_id=obj.id,
             action_type="CREATED",
-            description=f"Booking created with status {obj.status}"
+            description=f"Booking created with status {status_display}",
+            changed_by_id=admin_id
         )
         db.commit()
     except IntegrityError as e:
@@ -520,7 +528,12 @@ async def create_booking(request: Request, db: Session = Depends(get_db)):
 
 
 @router.put("/{item_id}", response_model=Dict[str, Any])
-def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(get_db)):
+def update_booking(
+    item_id: int, 
+    payload: Dict[str, Any], 
+    db: Session = Depends(get_db),
+    current_admin: Optional[Admin] = Depends(get_optional_admin)
+):
     obj = db.get(Booking, item_id)
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
@@ -540,7 +553,8 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
         'pickup_datetime': 'Pickup Date/Time',
         'dropoff_datetime': 'Dropoff Date/Time',
         'total_amount': 'Total Amount',
-        'broker': 'Broker'
+        'broker': 'Broker',
+        'broker_id': 'Broker ID'
     }
     
     changes = []
@@ -548,8 +562,10 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
         if field in payload:
             old_val = getattr(obj, field, None)
             new_val = payload[field]
-            if str(old_val) != str(new_val):
-                changes.append((field, label, str(old_val) if old_val is not None else None, str(new_val) if new_val is not None else None))
+            old_val_formatted = _format_value_for_history(old_val)
+            new_val_formatted = _format_value_for_history(new_val)
+            if old_val_formatted != new_val_formatted:
+                changes.append((field, label, old_val_formatted, new_val_formatted))
 
     apply_updates(obj, payload)
     
@@ -560,6 +576,7 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
             obj.one_way_fee = one_way_fee
     
     # Create history entries for changes
+    admin_id = current_admin.id if current_admin else None
     for field, label, old_val, new_val in changes:
         _create_history_entry(
             db=db,
@@ -568,7 +585,8 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
             field_name=field,
             old_value=old_val,
             new_value=new_val,
-            description=f"{label} changed from '{old_val}' to '{new_val}'"
+            description=f"{label} changed from '{old_val}' to '{new_val}'",
+            changed_by_id=admin_id
         )
     
     try:
@@ -580,8 +598,25 @@ def update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(
     return to_dict(obj)
 
 
+def _format_value_for_history(value: Any) -> str | None:
+    """Format a value for display in history, extracting enum values if needed."""
+    if value is None:
+        return None
+    # Handle enums - extract the value/name
+    if hasattr(value, 'value'):
+        return str(value.value)
+    if hasattr(value, 'name') and not isinstance(value, str):
+        return str(value.name)
+    return str(value)
+
+
 @router.patch("/{item_id}", response_model=Dict[str, Any])
-def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = Depends(get_db)):
+def partial_update_booking(
+    item_id: int, 
+    payload: Dict[str, Any], 
+    db: Session = Depends(get_db),
+    current_admin: Optional[Admin] = Depends(get_optional_admin)
+):
     """Partial update - same as PUT but semantically indicates partial updates"""
     obj = db.get(Booking, item_id)
     if not obj:
@@ -602,7 +637,8 @@ def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = 
         'pickup_datetime': 'Pickup Date/Time',
         'dropoff_datetime': 'Dropoff Date/Time',
         'total_amount': 'Total Amount',
-        'broker': 'Broker'
+        'broker': 'Broker',
+        'broker_id': 'Broker ID'
     }
     
     changes = []
@@ -610,8 +646,10 @@ def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = 
         if field in payload:
             old_val = getattr(obj, field, None)
             new_val = payload[field]
-            if str(old_val) != str(new_val):
-                changes.append((field, label, str(old_val) if old_val is not None else None, str(new_val) if new_val is not None else None))
+            old_val_formatted = _format_value_for_history(old_val)
+            new_val_formatted = _format_value_for_history(new_val)
+            if old_val_formatted != new_val_formatted:
+                changes.append((field, label, old_val_formatted, new_val_formatted))
 
     apply_updates(obj, payload)
     
@@ -622,6 +660,7 @@ def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = 
             obj.one_way_fee = one_way_fee
     
     # Create history entries for changes
+    admin_id = current_admin.id if current_admin else None
     for field, label, old_val, new_val in changes:
         _create_history_entry(
             db=db,
@@ -630,7 +669,8 @@ def partial_update_booking(item_id: int, payload: Dict[str, Any], db: Session = 
             field_name=field,
             old_value=old_val,
             new_value=new_val,
-            description=f"{label} changed from '{old_val}' to '{new_val}'"
+            description=f"{label} changed from '{old_val}' to '{new_val}'",
+            changed_by_id=admin_id
         )
     
     try:
