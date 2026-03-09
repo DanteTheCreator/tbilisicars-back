@@ -128,9 +128,9 @@ async def list_tasks(
             } if task.assigned_to else None,
             "related_vehicle": {
                 "id": task.related_vehicle.id,
-                "brand": task.related_vehicle.brand,
-                "model": task.related_vehicle.model,
-                "name": task.related_vehicle.name
+                "brand": task.related_vehicle.brand_name or task.related_vehicle.make or "",
+                "model": task.related_vehicle.model_name or task.related_vehicle.model or "",
+                "name": f"{task.related_vehicle.make or ''} {task.related_vehicle.model or ''} ({task.related_vehicle.license_plate})".strip()
             } if task.related_vehicle else None,
             "related_booking": {
                 "id": task.related_booking.id,
@@ -334,8 +334,8 @@ async def delete_task(
             detail="Task not found"
         )
     
-    # Only creator or super admin can delete tasks
-    if task.created_by_id != current_admin.id and current_admin.admin_role.value != "SUPER_ADMIN":
+    # Only creator or admin can delete tasks
+    if task.created_by_id != current_admin.id and current_admin.admin_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="You don't have permission to delete this task"

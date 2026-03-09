@@ -26,20 +26,26 @@ async def get_admin_stats(
         # Total vehicles
         total_vehicles = db.query(Vehicle).count()
         
-        # Available vehicles
-        available_vehicles = db.query(Vehicle).filter(
-            Vehicle.status == 'AVAILABLE'
-        ).count()
-        
-                # Active bookings (current)
+        # Active bookings (current)
         now = datetime.now()
-        active_bookings = db.query(Booking).filter(
+        active_bookings_query = db.query(Booking).filter(
             and_(
                 Booking.pickup_datetime <= now,
                 Booking.dropoff_datetime >= now,
                 Booking.status.in_(['CONFIRMED', 'DELIVERED'])
             )
-        ).count()
+        )
+        active_bookings = active_bookings_query.count()
+        
+        # Get vehicle IDs that are currently assigned to active bookings
+        assigned_vehicle_ids = [
+            booking.vehicle_id 
+            for booking in active_bookings_query.all() 
+            if booking.vehicle_id is not None
+        ]
+        
+        # Available vehicles = total vehicles - vehicles assigned to active bookings
+        available_vehicles = total_vehicles - len(set(assigned_vehicle_ids))
         
         # Total users
         total_users = db.query(User).count()

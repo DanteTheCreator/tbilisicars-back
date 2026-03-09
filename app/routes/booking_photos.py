@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Form
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from typing import List
@@ -14,6 +14,7 @@ router = APIRouter()
 async def upload_booking_photos(
     booking_id: int,
     files: List[UploadFile] = File(...),
+    photo_type: str = Form("GENERAL"),
     db: Session = Depends(get_db)
 ):
     # Check if booking exists
@@ -26,6 +27,11 @@ async def upload_booking_photos(
 
     uploaded_photos = []
     errors = []
+    normalized_photo_type = (photo_type or "GENERAL").upper()
+    if normalized_photo_type not in {"GENERAL", "PICKUP", "RETURN"}:
+        raise HTTPException(status_code=400, detail="Invalid photo_type. Allowed values: GENERAL, PICKUP, RETURN")
+
+    latest_uploaded_object_name = None
 
     for file in files:
         try:
@@ -42,8 +48,8 @@ async def upload_booking_photos(
 
             await file.seek(0)
 
-            # Upload to MinIO using vehicle_photos bucket (reusing bucket for now)
-            object_name = minio_client.upload_vehicle_photo(file.file, file.filename, booking_id)
+            # Upload to MinIO using bookings/ prefix to separate from vehicle/model photos
+            object_name = minio_client.upload_booking_photo(file.file, file.filename, booking_id)
 
             if object_name:
                 photo_record = BookingPhoto(
@@ -52,11 +58,13 @@ async def upload_booking_photos(
                     original_filename=file.filename,
                     file_size=file_size,
                     content_type=file.content_type or f"image/{file_extension}",
-                    display_order=0
+                    display_order=0,
+                    photo_type=normalized_photo_type
                 )
                 db.add(photo_record)
                 db.commit()
                 db.refresh(photo_record)
+                latest_uploaded_object_name = object_name
 
                 photo_url = minio_client.get_vehicle_photo_url(object_name)
                 uploaded_photos.append({
@@ -66,6 +74,7 @@ async def upload_booking_photos(
                     "url": photo_url,
                     "file_size": file_size,
                     "content_type": photo_record.content_type,
+                    "photo_type": photo_record.photo_type,
                     "created_at": photo_record.created_at.isoformat()
                 })
             else:
@@ -73,6 +82,13 @@ async def upload_booking_photos(
         except Exception as e:
             errors.append(f"File {file.filename}: {str(e)}")
             db.rollback()
+
+    if latest_uploaded_object_name and normalized_photo_type == "PICKUP":
+        booking.pickup_photo = latest_uploaded_object_name
+        db.commit()
+    elif latest_uploaded_object_name and normalized_photo_type == "RETURN":
+        booking.return_photo = latest_uploaded_object_name
+        db.commit()
 
     return JSONResponse(content={
         "message": f"Processed {len(files)} files",
@@ -109,6 +125,7 @@ async def get_booking_photos(
                 "content_type": photo_record.content_type,
                 "is_primary": photo_record.is_primary,
                 "display_order": photo_record.display_order,
+                "photo_type": photo_record.photo_type,
                 "alt_text": photo_record.alt_text,
                 "created_at": photo_record.created_at.isoformat(),
                 "updated_at": photo_record.updated_at.isoformat()
@@ -142,6 +159,10 @@ async def delete_booking_photo(
     try:
         minio_success = minio_client.delete_vehicle_photo(object_name)
         if minio_success:
+            if booking.pickup_photo == object_name:
+                booking.pickup_photo = None
+            if booking.return_photo == object_name:
+                booking.return_photo = None
             db.delete(photo_record)
             db.commit()
             return JSONResponse(content={

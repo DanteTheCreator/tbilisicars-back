@@ -22,6 +22,7 @@ class BookingPhoto(Base, TimestampMixin):
     is_primary: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
     display_order: Mapped[int] = mapped_column(Integer, default=0)
     alt_text: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    photo_type: Mapped[str] = mapped_column(String(20), default="GENERAL", index=True)
 
     # Relations
     booking: Mapped["Booking"] = relationship(back_populates="photos")

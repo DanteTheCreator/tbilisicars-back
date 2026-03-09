@@ -20,6 +20,7 @@ class DamageSeverityEnum(str, PyEnum):
 class DamageReport(Base, TimestampMixin):
     vehicle_id: Mapped[int] = mapped_column(ForeignKey("vehicle.id", ondelete="CASCADE"), index=True)
     booking_id: Mapped[int | None] = mapped_column(ForeignKey("booking.id", ondelete="SET NULL"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("user.id", ondelete="SET NULL"), nullable=True, index=True)
 
     description: Mapped[str] = mapped_column(String(1000))
     severity: Mapped[DamageSeverityEnum] = mapped_column(SAEnum(DamageSeverityEnum))
@@ -30,3 +31,4 @@ class DamageReport(Base, TimestampMixin):
 
     vehicle: Mapped["Vehicle"] = relationship(back_populates="damages")
     booking: Mapped[Booking | None] = relationship(back_populates="damages")
+    user: Mapped["User | None"] = relationship("User")

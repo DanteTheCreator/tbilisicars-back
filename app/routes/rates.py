@@ -11,6 +11,8 @@ from sqlalchemy import select, and_
 
 from app.models.rate import Rate, RateTier, RateDayRange, RateHourRange, RateKmRange
 from app.models.vehicle_group import VehicleGroup
+from app.models.vehicle_model import VehicleModel
+from app.models.brand import Brand
 from app.models.vehicle import Vehicle
 from app.models.location import Location
 from app.models.one_way_fee import OneWayFee
@@ -32,8 +34,8 @@ class CalculatePriceRequest(BaseModel):
 class CalculatePriceResponse(BaseModel):
     rate_id: Optional[int]
     rate_name: Optional[str]
-    vehicle_group_id: Optional[int]
-    vehicle_group_name: Optional[str]
+    vehicle_model_id: Optional[int]
+    vehicle_model_name: Optional[str]
     rental_days: int
     price_per_day: float
     base_total: float
@@ -62,6 +64,114 @@ def list_rates(
     return [to_dict(i) for i in items]
 
 
+@router.get("/trip-prices", response_model=Dict[str, Any])
+def trip_prices(
+    pickup_date: str = Query(..., description="ISO date, e.g. 2025-11-10"),
+    dropoff_date: str = Query(..., description="ISO date, e.g. 2025-11-15"),
+    db: Session = Depends(get_db),
+):
+    """
+    Return price_per_day and total_price for every vehicle_model_id.
+    Uses the exact same rate-tier lookup as calculate-price: iterate rates
+    by priority (newest first), take the FIRST matching tier per model.
+    This is the single source of truth for listing-page prices.
+    """
+
+    # Parse dates
+    try:
+        pickup = datetime.fromisoformat(pickup_date.replace('Z', '+00:00'))
+        dropoff = datetime.fromisoformat(dropoff_date.replace('Z', '+00:00'))
+    except ValueError:
+        pickup = datetime.strptime(pickup_date.split('T')[0], '%Y-%m-%d')
+        dropoff = datetime.strptime(dropoff_date.split('T')[0], '%Y-%m-%d')
+
+    rental_days = (dropoff - pickup).days
+    if rental_days < 1:
+        rental_days = 1
+
+    p_date = pickup.date()
+
+    # Find active rates valid for the pickup date and matching duration,
+    # ordered by priority (most recent first) — same as calculate-price
+    applicable_rates = db.query(Rate).filter(
+        and_(
+            Rate.is_active == True,
+            Rate.valid_from <= p_date,
+            Rate.valid_until >= p_date,
+            Rate.min_days <= rental_days,
+            (Rate.max_days == None) | (Rate.max_days >= rental_days),
+        )
+    ).order_by(Rate.valid_from.desc(), Rate.id.desc()).all()
+
+    if not applicable_rates:
+        return {"prices": {}, "rental_days": rental_days}
+
+    # For each rate (by priority), grab its matching tiers and assign to
+    # vehicle models that haven't been assigned yet — first match wins.
+    assigned: Dict[int, float] = {}  # vehicle_model_id -> price_per_day
+
+    for rate in applicable_rates:
+        tiers = db.query(RateTier).filter(
+            and_(
+                RateTier.rate_id == rate.id,
+                RateTier.from_days <= rental_days,
+                (RateTier.to_days == None) | (RateTier.to_days >= rental_days),
+            )
+        ).all()
+
+        for tier in tiers:
+            mid = tier.vehicle_model_id
+            if mid not in assigned:
+                assigned[mid] = float(tier.price_per_day)
+
+    prices = {}
+    for mid, ppd in assigned.items():
+        prices[str(mid)] = {
+            "price_per_day": ppd,
+            "total_price": round(ppd * rental_days, 2),
+        }
+
+    return {"prices": prices, "rental_days": rental_days}
+
+
+@router.get("/current-prices", response_model=Dict[str, Any])
+def current_prices(db: Session = Depends(get_db)):
+    """
+    Return the lowest active rate price_per_day for each vehicle_model_id
+    based on rates valid today. Used by the listing page to show accurate prices.
+    """
+    today = date.today()
+
+    # Find all active rates valid today
+    active_rates = db.query(Rate).filter(
+        and_(
+            Rate.is_active == True,
+            Rate.valid_from <= today,
+            Rate.valid_until >= today,
+        )
+    ).all()
+
+    if not active_rates:
+        return {"prices": {}}
+
+    rate_ids = [r.id for r in active_rates]
+
+    # Get the lowest price_per_day per vehicle_model_id from matching tiers
+    from sqlalchemy import func
+    rows = (
+        db.query(
+            RateTier.vehicle_model_id,
+            func.min(RateTier.price_per_day).label("min_price"),
+        )
+        .filter(RateTier.rate_id.in_(rate_ids))
+        .group_by(RateTier.vehicle_model_id)
+        .all()
+    )
+
+    prices = {str(row.vehicle_model_id): float(row.min_price) for row in rows}
+    return {"prices": prices}
+
+
 @router.post("/calculate-price", response_model=Dict[str, Any])
 def calculate_price(
     request: CalculatePriceRequest,
@@ -75,9 +185,10 @@ def calculate_price(
     print(f"[DEBUG RATES START] request.pickup_location_id={request.pickup_location_id}, request.dropoff_location_id={request.dropoff_location_id}")
     
     try:
-        # 1. Get the vehicle with its group and location
+        # 1. Get the vehicle with its model, group and location
         vehicle = db.query(Vehicle).options(
             joinedload(Vehicle.vehicle_group),
+            joinedload(Vehicle.vehicle_model).joinedload(VehicleModel.brand),
             joinedload(Vehicle.location)
         ).filter(Vehicle.id == request.vehicle_id).first()
         if not vehicle:
@@ -110,49 +221,34 @@ def calculate_price(
         
         # Calculate one-way fee if both locations provided
         if request.pickup_location_id and request.dropoff_location_id and request.pickup_location_id != request.dropoff_location_id:
-            pickup_loc = db.query(Location).filter(Location.id == request.pickup_location_id).first()
-            dropoff_loc = db.query(Location).filter(Location.id == request.dropoff_location_id).first()
-            
-            print(f"[DEBUG RATES] pickup_loc={pickup_loc}, dropoff_loc={dropoff_loc}")
-            if pickup_loc and dropoff_loc:
-                print(f"[DEBUG RATES] pickup_city={pickup_loc.city}, dropoff_city={dropoff_loc.city}")
-            
-            if pickup_loc and dropoff_loc and pickup_loc.city and dropoff_loc.city:
-                # Check if different cities
-                if pickup_loc.city.lower() != dropoff_loc.city.lower():
-                    print(f"[DEBUG RATES] Different cities! Querying OneWayFee...")
-                    fee_record = db.query(OneWayFee).filter(
-                        OneWayFee.from_city.ilike(pickup_loc.city),
-                        OneWayFee.to_city.ilike(dropoff_loc.city),
-                        OneWayFee.is_active == True
-                    ).first()
-                    print(f"[DEBUG RATES] fee_record={fee_record}")
-                    if fee_record:
-                        one_way_fee = float(fee_record.fee_amount)
-                        print(f"[DEBUG RATES] one_way_fee={one_way_fee}")
+            print(f"[DEBUG RATES] Different locations! Querying OneWayFee...")
+            fee_record = db.query(OneWayFee).filter(
+                OneWayFee.from_location_id == request.pickup_location_id,
+                OneWayFee.to_location_id == request.dropoff_location_id,
+                OneWayFee.is_active == True
+            ).first()
+            print(f"[DEBUG RATES] fee_record={fee_record}")
+            if fee_record:
+                one_way_fee = float(fee_record.fee_amount)
+                print(f"[DEBUG RATES] one_way_fee={one_way_fee}")
         
         # Calculate delivery fee if vehicle is not at pickup location
         if request.pickup_location_id and vehicle.location_id and vehicle.location_id != request.pickup_location_id:
-            pickup_loc = db.query(Location).filter(Location.id == request.pickup_location_id).first()
-            
-            if vehicle.location and pickup_loc and vehicle.location.city and pickup_loc.city:
-                # Check if different cities
-                if vehicle.location.city.lower() != pickup_loc.city.lower():
-                    fee_record = db.query(OneWayFee).filter(
-                        OneWayFee.from_city.ilike(vehicle.location.city),
-                        OneWayFee.to_city.ilike(pickup_loc.city),
-                        OneWayFee.is_active == True
-                    ).first()
-                    if fee_record:
-                        delivery_fee = float(fee_record.fee_amount)
+            fee_record = db.query(OneWayFee).filter(
+                OneWayFee.from_location_id == vehicle.location_id,
+                OneWayFee.to_location_id == request.pickup_location_id,
+                OneWayFee.is_active == True
+            ).first()
+            if fee_record:
+                delivery_fee = float(fee_record.fee_amount)
         
-        if not vehicle.vehicle_group_id:
-            # No vehicle group, fall back to starting_price
+        if not vehicle.vehicle_model_id:
+            # No vehicle model, fall back to starting_price
             fallback_price = float(vehicle.starting_price) if vehicle.starting_price else 50.0
             base_total = fallback_price * rental_days
             
             return {
-                "error": "Vehicle has no vehicle group assigned",
+                "error": "Vehicle has no vehicle model assigned",
                 "fallback_price": fallback_price,
                 "rental_days": rental_days,
                 "price_per_day": fallback_price,
@@ -163,15 +259,17 @@ def calculate_price(
                 "currency": "EUR"
             }
         
-        # Get vehicle group info
+        # Get vehicle model info
+        vehicle_model = vehicle.vehicle_model
         vehicle_group = vehicle.vehicle_group
+        model_display_name = f"{vehicle_model.brand.name} {vehicle_model.name}" if vehicle_model and vehicle_model.brand else (vehicle_model.name if vehicle_model else None)
         
         # 3. Find applicable rates
         # Query for active rates that:
         # - Are active
         # - Valid for the pickup date
         # - Support the rental duration
-        # - Have a tier for this vehicle group
+        # - Have a tier for this vehicle model
         applicable_rates = db.query(Rate).filter(
             and_(
                 Rate.is_active == True,
@@ -187,11 +285,11 @@ def calculate_price(
         selected_tier = None
         
         for rate in applicable_rates:
-            # Check if this rate has a tier for our vehicle group and rental duration
+            # Check if this rate has a tier for our vehicle model and rental duration
             tier = db.query(RateTier).filter(
                 and_(
                     RateTier.rate_id == rate.id,
-                    RateTier.vehicle_group_id == vehicle.vehicle_group_id,
+                    RateTier.vehicle_model_id == vehicle.vehicle_model_id,
                     RateTier.from_days <= rental_days,
                     (RateTier.to_days == None) | (RateTier.to_days >= rental_days)
                 )
@@ -202,7 +300,6 @@ def calculate_price(
                 selected_tier = tier
                 break
         
-        # 3. Find applicable rates
         if selected_rate and selected_tier:
             price_per_day = float(selected_tier.price_per_day)
             base_total = price_per_day * rental_days
@@ -210,8 +307,8 @@ def calculate_price(
             return {
                 "rate_id": selected_rate.id,
                 "rate_name": selected_rate.name,
-                "vehicle_group_id": vehicle.vehicle_group_id,
-                "vehicle_group_name": vehicle_group.name if vehicle_group else None,
+                "vehicle_model_id": vehicle.vehicle_model_id,
+                "vehicle_model_name": model_display_name,
                 "rental_days": rental_days,
                 "price_per_day": price_per_day,
                 "base_total": base_total,
@@ -245,8 +342,8 @@ def calculate_price(
                 "delivery_fee": delivery_fee,
                 "total_with_fees": base_total + one_way_fee + delivery_fee,
                 "currency": "EUR",
-                "vehicle_group_id": vehicle.vehicle_group_id,
-                "vehicle_group_name": vehicle_group.name if vehicle_group else None
+                "vehicle_model_id": vehicle.vehicle_model_id,
+                "vehicle_model_name": model_display_name
             }
     
     except HTTPException:
@@ -303,7 +400,7 @@ def get_rate_tiers(item_id: int, db: Session = Depends(get_db)):
         )
     
     tiers = db.query(RateTier).filter(RateTier.rate_id == item_id).order_by(
-        RateTier.vehicle_group_id, RateTier.from_days
+        RateTier.vehicle_model_id, RateTier.from_days
     ).all()
     
     return [to_dict(t) for t in tiers]
@@ -312,7 +409,7 @@ def get_rate_tiers(item_id: int, db: Session = Depends(get_db)):
 @router.get("/{item_id}/tiers/matrix", response_model=Dict[str, Any])
 def get_rate_matrix(item_id: int, db: Session = Depends(get_db)):
     """
-    Get rate pricing matrix organized by vehicle group and day range
+    Get rate pricing matrix organized by vehicle model and day range
     Returns a structured view like the screenshot
     """
     rate = db.get(Rate, item_id)
@@ -330,26 +427,28 @@ def get_rate_matrix(item_id: int, db: Session = Depends(get_db)):
     # Get all tiers
     tiers = db.query(RateTier).filter(RateTier.rate_id == item_id).all()
     
-    # Get vehicle groups that have tiers
-    vehicle_group_ids = list(set(t.vehicle_group_id for t in tiers))
-    vehicle_groups = db.query(VehicleGroup).filter(
-        VehicleGroup.id.in_(vehicle_group_ids)
-    ).all()
+    # Get vehicle models that have tiers
+    vehicle_model_ids = list(set(t.vehicle_model_id for t in tiers if t.vehicle_model_id))
+    vehicle_models = db.query(VehicleModel).options(
+        joinedload(VehicleModel.brand)
+    ).filter(
+        VehicleModel.id.in_(vehicle_model_ids)
+    ).all() if vehicle_model_ids else []
     
     # Organize into matrix
     matrix = {}
-    for vg in vehicle_groups:
-        group_name = vg.name
-        matrix[group_name] = {
-            "vehicle_group_id": vg.id,
+    for vm in vehicle_models:
+        display_name = f"{vm.brand.name} {vm.name}" if vm.brand else vm.name
+        matrix[display_name] = {
+            "vehicle_model_id": vm.id,
             "prices": {}
         }
         
         # Find price for each day range
         for tier in tiers:
-            if tier.vehicle_group_id == vg.id:
+            if tier.vehicle_model_id == vm.id:
                 range_key = f"{tier.from_days}-{tier.to_days if tier.to_days else 'unlimited'}"
-                matrix[group_name]["prices"][range_key] = {
+                matrix[display_name]["prices"][range_key] = {
                     "from_days": tier.from_days,
                     "to_days": tier.to_days,
                     "price_per_day": float(tier.price_per_day),
@@ -439,14 +538,14 @@ def create_rate_tier(
             detail="Rate not found"
         )
     
-    # Verify vehicle group exists
-    vehicle_group_id = payload.get('vehicle_group_id')
-    if vehicle_group_id:
-        vg = db.get(VehicleGroup, vehicle_group_id)
-        if not vg:
+    # Verify vehicle model exists
+    vehicle_model_id = payload.get('vehicle_model_id')
+    if vehicle_model_id:
+        vm = db.get(VehicleModel, vehicle_model_id)
+        if not vm:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="Vehicle group not found"
+                detail="Vehicle model not found"
             )
     
     obj = RateTier()
@@ -471,7 +570,8 @@ def create_rate_tiers_bulk(
     tiers: List[Dict[str, Any]],
     db: Session = Depends(get_db)
 ):
-    """Create multiple rate tiers at once (useful for setting up full pricing matrix)"""
+    """Create multiple rate tiers at once. Deletes ALL existing tiers for this
+    rate first so there are never stale duplicates — single source of truth."""
     # Verify rate exists
     rate = db.get(Rate, rate_id)
     if not rate:
@@ -479,6 +579,9 @@ def create_rate_tiers_bulk(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Rate not found"
         )
+    
+    # Remove all existing tiers for this rate before inserting fresh ones
+    db.query(RateTier).filter(RateTier.rate_id == rate_id).delete()
     
     created_tiers = []
     for tier_data in tiers:

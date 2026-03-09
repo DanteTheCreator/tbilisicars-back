@@ -6,6 +6,8 @@ from fastapi import APIRouter
 from .auth import router as auth_router
 from .users import router as users_router
 from .locations import router as locations_router
+from .brands import router as brands_router
+from .vehicle_models import router as vehicle_models_router
 from .vehicles import router as vehicles_router
 from .vehicle_groups import router as vehicle_groups_router
 from .vehicle_prices import router as vehicle_prices_router
@@ -29,12 +31,17 @@ from .one_way_fees import router as one_way_fees_router
 from .booking_emails import router as booking_emails_router
 from .email_bookings import router as email_bookings_router
 from .tasks import router as tasks_router
+from .maintenance import router as maintenance_router
+from .cases import router as cases_router
+from .partners import router as partners_router
 
 api_router = APIRouter(prefix="/api")
 
 api_router.include_router(auth_router)
 api_router.include_router(users_router)
 api_router.include_router(locations_router)
+api_router.include_router(brands_router)
+api_router.include_router(vehicle_models_router)
 api_router.include_router(vehicles_router)
 api_router.include_router(vehicle_groups_router)
 api_router.include_router(vehicle_prices_router)
@@ -57,3 +64,20 @@ api_router.include_router(admin_management_router)
 api_router.include_router(one_way_fees_router)
 api_router.include_router(email_bookings_router)
 api_router.include_router(tasks_router)
+api_router.include_router(maintenance_router)
+api_router.include_router(cases_router)
+api_router.include_router(partners_router)
+
+# Export individual modules for direct import
+__all__ = [
+    'api_router',
+    'auth_router',
+    'users_router',
+    'locations_router',
+    'brands_router',
+    'vehicle_models_router',
+    'vehicles_router',
+    'vehicle_groups_router',
+    'bookings_router',
+]
+

@@ -11,7 +11,7 @@ from .base import Base, TimestampMixin
 
 class Rate(Base, TimestampMixin):
     """
-    Rate strategy - defines pricing rules for vehicle groups
+    Rate strategy - defines pricing rules for vehicle models
     Similar to rental software rate strategies with parent/child relationships
     """
     
@@ -97,12 +97,12 @@ class Rate(Base, TimestampMixin):
 
 class RateTier(Base, TimestampMixin):
     """
-    Price tier for a rate - defines pricing for a vehicle group within day ranges
-    Example: Economy cars cost €36.00 for 0-3 days, €30.38 for 4-7 days, etc.
+    Price tier for a rate - defines pricing for a vehicle model within day ranges
+    Example: Toyota Camry costs €36.00 for 0-3 days, €30.38 for 4-7 days, etc.
     """
     
     rate_id: Mapped[int] = mapped_column(ForeignKey("rate.id", ondelete="CASCADE"), index=True)
-    vehicle_group_id: Mapped[int] = mapped_column(ForeignKey("vehiclegroup.id", ondelete="CASCADE"), index=True)
+    vehicle_model_id: Mapped[int | None] = mapped_column(ForeignKey("vehicle_model.id", ondelete="CASCADE"), nullable=True, index=True)
     
     # Day range for this tier
     from_days: Mapped[int] = mapped_column(Integer, default=0)
@@ -114,10 +114,10 @@ class RateTier(Base, TimestampMixin):
     
     # Relations
     rate: Mapped["Rate"] = relationship(back_populates="rate_tiers")
-    vehicle_group: Mapped["VehicleGroup"] = relationship()
+    vehicle_model: Mapped[Optional["VehicleModel"]] = relationship()
     
     def __repr__(self) -> str:
-        return f"<RateTier(rate={self.rate_id}, group={self.vehicle_group_id}, {self.from_days}-{self.to_days} days, €{self.price_per_day})>"
+        return f"<RateTier(rate={self.rate_id}, model={self.vehicle_model_id}, {self.from_days}-{self.to_days} days, €{self.price_per_day})>"
 
 
 class RateDayRange(Base, TimestampMixin):

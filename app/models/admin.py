@@ -12,13 +12,15 @@ from .base import Base, TimestampMixin
 
 if TYPE_CHECKING:
     from .task import Task
+    from .case import Case, CaseComment, CaseAttachment
 
 
 class AdminRole(str, enum.Enum):
     """Admin user role hierarchy."""
-    SUPER_ADMIN = "super_admin"
     ADMIN = "admin"
-    GUEST_ADMIN = "guest_admin"
+    REGIONAL_MANAGER = "regional_manager"
+    SERVICE_MANAGER = "service_manager"
+    RENTAL_AGENT = "rental_agent"
 
 
 class Admin(Base, TimestampMixin):
@@ -40,7 +42,7 @@ class Admin(Base, TimestampMixin):
     # Role-based hierarchy
     admin_role: Mapped[str] = mapped_column(
         String(20),
-        default="guest_admin",
+        default="rental_agent",
         nullable=False
     )
     
@@ -64,25 +66,32 @@ class Admin(Base, TimestampMixin):
     can_manage_damages: Mapped[bool] = mapped_column(Boolean, default=True)
     can_manage_tasks: Mapped[bool] = mapped_column(Boolean, default=True)
     can_view_calendar: Mapped[bool] = mapped_column(Boolean, default=True)
+    can_manage_cases: Mapped[bool] = mapped_column(Boolean, default=True)
 
     # Task relationships
     created_tasks: Mapped[list["Task"]] = relationship("Task", foreign_keys="Task.created_by_id", back_populates="created_by")
     assigned_tasks: Mapped[list["Task"]] = relationship("Task", foreign_keys="Task.assigned_to_id", back_populates="assigned_to")
+    
+    # Case relationships
+    created_cases: Mapped[list["Case"]] = relationship("Case", foreign_keys="Case.created_by_id", back_populates="created_by")
+    assigned_cases: Mapped[list["Case"]] = relationship("Case", secondary="case_assignments", back_populates="assigned_admins")
+    case_comments: Mapped[list["CaseComment"]] = relationship("CaseComment", back_populates="admin")
+    case_attachments: Mapped[list["CaseAttachment"]] = relationship("CaseAttachment", back_populates="admin")
 
     def __repr__(self) -> str:
         return f"<Admin {self.username} ({self.admin_role})>"
     
     @property
     def is_super_admin_role(self) -> bool:
-        """Check if admin has super admin role."""
-        return self.admin_role == "super_admin"
+        """Check if admin has admin role (highest level)."""
+        return self.admin_role == "admin"
     
     @property
     def is_admin_role(self) -> bool:
-        """Check if admin has admin role or higher."""
-        return self.admin_role in ("super_admin", "admin")
+        """Check if admin has admin or regional manager role or higher."""
+        return self.admin_role in ("admin", "regional_manager")
     
     @property
     def is_guest_admin_role(self) -> bool:
-        """Check if admin has guest admin role."""
-        return self.admin_role == "guest_admin"
+        """Check if admin has rental agent role (lowest level)."""
+        return self.admin_role == "rental_agent"

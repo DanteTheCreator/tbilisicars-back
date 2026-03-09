@@ -45,6 +45,7 @@ def create_access_token(data: dict, expires_delta: Optional[timedelta] = None) -
     
     to_encode.update({"exp": expire})
     encoded_jwt = jwt.encode(to_encode, settings.SECRET_KEY, algorithm=settings.ALGORITHM)
+    logger.info(f"[AUTH] Created token expiring in {settings.ACCESS_TOKEN_EXPIRE_MINUTES} minutes at {expire}")
     return encoded_jwt
 
 
@@ -53,24 +54,29 @@ def verify_token(token: str) -> Optional[dict]:
     try:
         payload = jwt.decode(token, settings.SECRET_KEY, algorithms=[settings.ALGORITHM])
         return payload
-    except JWTError:
+    except JWTError as e:
+        logger.warning(f"[AUTH] Token verification failed: {type(e).__name__}: {str(e)}")
         return None
 
 
 def authenticate_admin(db: Session, username: str, password: str) -> Optional[Admin]:
     """Authenticate an admin user."""
+    logger.info(f"[AUTH] Login attempt for: {username}")
     admin = db.query(Admin).filter(
         (Admin.username == username) | (Admin.email == username)
     ).first()
     if not admin:
+        logger.warning(f"[AUTH] User not found: {username}")
         return None
 
+    logger.info(f"[AUTH] Found user: {admin.username}, is_active: {admin.is_active}")
     # Verify password but guard against passlib/bcrypt issues that can raise
     # ValueError (e.g. password > 72 bytes) or backend detection errors. If
     # verification fails or raises, treat as authentication failure rather
     # than letting an exception return a 500.
     try:
         ok = verify_password(password, admin.hashed_password)
+        logger.info(f"[AUTH] Password verification result: {ok}")
     except ValueError:
         # Known bcrypt limitation: treat as auth failure
         logger.debug("Password verification failed due to ValueError (possible bcrypt length limit)")
@@ -82,9 +88,11 @@ def authenticate_admin(db: Session, username: str, password: str) -> Optional[Ad
         return None
 
     if not ok:
+        logger.warning(f"[AUTH] Password mismatch for user: {username}")
         return None
     
     if not admin.is_active:
+        logger.warning(f"[AUTH] User is inactive: {username}")
         return None
     
     # Update last login
@@ -128,21 +136,23 @@ def get_current_admin(
 
 
 def get_current_super_admin(current_admin: Admin = Depends(get_current_admin)) -> Admin:
-    """Get current authenticated super admin."""
-    if current_admin.admin_role != "super_admin":
+    """Get current authenticated admin with highest privileges."""
+    logger.info(f"[AUTH] Checking super admin - user: {current_admin.username}, role: '{current_admin.admin_role}', type: {type(current_admin.admin_role)}")
+    logger.info(f"[AUTH] Role comparison: '{current_admin.admin_role}' != 'admin' = {current_admin.admin_role != 'admin'}")
+    if current_admin.admin_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Super admin privileges required"
+            detail="Admin privileges required"
         )
     return current_admin
 
 
 def get_current_admin_or_higher(current_admin: Admin = Depends(get_current_admin)) -> Admin:
-    """Get current authenticated admin with admin role or higher (not guest)."""
-    if current_admin.admin_role == "guest_admin":
+    """Get current authenticated admin with service manager role or higher (not rental agent)."""
+    if current_admin.admin_role == "rental_agent":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin privileges required"
+            detail="Higher privileges required"
         )
     return current_admin
 
@@ -178,9 +188,10 @@ def require_role(required_role: str):
     """Require specific admin role or higher."""
     def role_dependency(current_admin: Admin = Depends(get_current_admin)) -> Admin:
         role_hierarchy = {
-            "guest_admin": 0,
-            "admin": 1,
-            "super_admin": 2
+            "rental_agent": 0,
+            "service_manager": 1,
+            "regional_manager": 2,
+            "admin": 3
         }
         
         if role_hierarchy.get(current_admin.admin_role, 0) < role_hierarchy.get(required_role, 0):
@@ -195,8 +206,8 @@ def require_role(required_role: str):
 def require_permission(permission: str):
     """Decorator to require specific permission."""
     def permission_dependency(current_admin: Admin = Depends(get_current_admin)) -> Admin:
-        # Super admins have all permissions
-        if current_admin.admin_role == "super_admin":
+        # Admins have all permissions
+        if current_admin.admin_role == "admin":
             return current_admin
         
         # Check specific permission

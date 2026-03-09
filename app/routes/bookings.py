@@ -3,20 +3,27 @@ from __future__ import annotations
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request, status
+from fastapi.responses import Response
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy import and_
+from sqlalchemy import and_, or_, cast, String
 
 from app.models.booking import Booking, Extra, BookingExtra
 from app.models.booking_history import BookingHistory
+from app.models.booking_vehicle_assignment import BookingVehicleAssignment
 from app.models.user import User
 from app.models.one_way_fee import OneWayFee
 from app.models.location import Location
 from app.models.vehicle import Vehicle
+from app.models.vehicle_model import VehicleModel
+from app.models.vehicle_group import VehicleGroup
+from app.models.brand import Brand
 from app.models.rate import Rate, RateTier
 from app.models.admin import Admin
-from app.core.auth import get_optional_admin
+from app.core.auth import get_optional_admin, get_current_super_admin
+from app.core.email_sender import send_booking_confirmation
+from app.core.contract_pdf import generate_contract_pdf
 from .utils import get_db, to_dict, apply_updates
 import re
 
@@ -117,32 +124,20 @@ def _validate_contact_payload(payload: dict, required: bool = False) -> None:
 def _calculate_one_way_fee(db: Session, pickup_location_id: int, dropoff_location_id: int) -> float:
     """
     Calculate one-way fee based on pickup and dropoff locations.
-    Returns 0 if locations are in the same city or no fee is configured.
+    Returns 0 if locations are the same or no fee is configured.
     """
     if pickup_location_id == dropoff_location_id:
         return 0.0
     
-    # Get location cities
-    pickup_loc = db.query(Location).filter(Location.id == pickup_location_id).first()
-    dropoff_loc = db.query(Location).filter(Location.id == dropoff_location_id).first()
+    # Try to find one-way fee by location IDs
+    fee = db.query(OneWayFee).filter(
+        OneWayFee.from_location_id == pickup_location_id,
+        OneWayFee.to_location_id == dropoff_location_id,
+        OneWayFee.is_active == True
+    ).first()
     
-    if not pickup_loc or not dropoff_loc:
-        return 0.0
-    
-    # If cities are the same, no one-way fee
-    if pickup_loc.city and dropoff_loc.city and pickup_loc.city.lower() == dropoff_loc.city.lower():
-        return 0.0
-    
-    # Try to find one-way fee
-    if pickup_loc.city and dropoff_loc.city:
-        fee = db.query(OneWayFee).filter(
-            OneWayFee.from_city.ilike(pickup_loc.city),
-            OneWayFee.to_city.ilike(dropoff_loc.city),
-            OneWayFee.is_active == True
-        ).first()
-        
-        if fee:
-            return float(fee.fee_amount)
+    if fee:
+        return float(fee.fee_amount)
     
     return 0.0
 
@@ -171,6 +166,72 @@ def _create_history_entry(
     db.flush()
 
 
+def _handle_vehicle_change(
+    db: Session,
+    booking: Booking,
+    vehicle_change_data: Dict[str, Any],
+    admin_id: int | None = None
+) -> None:
+    """Handle vehicle change with proper assignment tracking"""
+    change_date_str = vehicle_change_data.get('change_date')
+    old_vehicle_id = vehicle_change_data.get('old_vehicle_id')
+    new_vehicle_id = vehicle_change_data.get('new_vehicle_id')
+    
+    # Parse the change date
+    if isinstance(change_date_str, str):
+        change_date = datetime.fromisoformat(change_date_str.replace('Z', '+00:00'))
+    else:
+        change_date = change_date_str or datetime.utcnow()
+    
+    # Update existing vehicle assignment to end at change date
+    if old_vehicle_id:
+        # Find the active assignment for the old vehicle
+        old_assignment = db.query(BookingVehicleAssignment).filter(
+            BookingVehicleAssignment.booking_id == booking.id,
+            BookingVehicleAssignment.vehicle_id == old_vehicle_id,
+            BookingVehicleAssignment.end_date > change_date
+        ).first()
+        
+        if old_assignment:
+            # Update the end date to the change date
+            old_assignment.end_date = change_date
+            old_assignment.return_location_id = vehicle_change_data.get('return_location_id')
+            old_assignment.odometer_reading = vehicle_change_data.get('odometer_reading')
+            old_assignment.notes = vehicle_change_data.get('notes')
+    
+    # Create new vehicle assignment from change date to booking end
+    if new_vehicle_id:
+        new_assignment = BookingVehicleAssignment(
+            booking_id=booking.id,
+            vehicle_id=new_vehicle_id,
+            start_date=change_date,
+            end_date=booking.dropoff_datetime
+        )
+        db.add(new_assignment)
+    
+    # Create history entry
+    change_desc = (
+        f"Vehicle changed from {vehicle_change_data.get('old_vehicle_info', 'N/A')} "
+        f"to {vehicle_change_data.get('new_vehicle_info', 'N/A')} "
+        f"on {change_date.strftime('%Y-%m-%d %H:%M')}. "
+        f"Old vehicle returned at {vehicle_change_data.get('return_location_name', 'N/A')} "
+        f"with odometer reading: {vehicle_change_data.get('odometer_reading', 'N/A')} km."
+    )
+    if vehicle_change_data.get('notes'):
+        change_desc += f" Notes: {vehicle_change_data['notes']}"
+    
+    _create_history_entry(
+        db=db,
+        booking_id=booking.id,
+        action_type="VEHICLE_CHANGED",
+        field_name="vehicle_id",
+        old_value=str(vehicle_change_data.get('old_vehicle_id', '')),
+        new_value=str(vehicle_change_data.get('new_vehicle_id', '')),
+        description=change_desc,
+        changed_by_id=admin_id
+    )
+
+
 def _calculate_delivery_fee(db: Session, vehicle_id: int, pickup_location_id: int) -> float:
     """
     Calculate delivery fee if vehicle's current location is different from pickup location.
@@ -185,21 +246,11 @@ def _calculate_delivery_fee(db: Session, vehicle_id: int, pickup_location_id: in
     if vehicle.location_id == pickup_location_id:
         return 0.0
     
-    # Get pickup location
-    pickup_loc = db.query(Location).filter(Location.id == pickup_location_id).first()
-    
-    if not vehicle.location or not pickup_loc:
-        return 0.0
-    
-    # If cities are the same, no delivery fee
-    if vehicle.location.city and pickup_loc.city and vehicle.location.city.lower() == pickup_loc.city.lower():
-        return 0.0
-    
-    # Try to find delivery fee from vehicle's city to pickup city
-    if vehicle.location.city and pickup_loc.city:
+    # Try to find delivery fee from vehicle's location to pickup location
+    if vehicle.location_id:
         fee = db.query(OneWayFee).filter(
-            OneWayFee.from_city.ilike(vehicle.location.city),
-            OneWayFee.to_city.ilike(pickup_loc.city),
+            OneWayFee.from_location_id == vehicle.location_id,
+            OneWayFee.to_location_id == pickup_location_id,
             OneWayFee.is_active == True
         ).first()
         
@@ -251,7 +302,7 @@ def _calculate_rate_for_booking(
         tier = db.query(RateTier).filter(
             and_(
                 RateTier.rate_id == rate.id,
-                RateTier.vehicle_group_id == vehicle.vehicle_group_id,
+                RateTier.vehicle_model_id == vehicle.vehicle_model_id,
                 RateTier.from_days <= rental_days,
                 (RateTier.to_days == None) | (RateTier.to_days >= rental_days)
             )
@@ -270,18 +321,69 @@ router = APIRouter(prefix="/bookings", tags=["bookings"])
 
 
 @router.get("/", response_model=List[Dict[str, Any]])
-def list_bookings(db: Session = Depends(get_db), skip: int = Query(0, ge=0), limit: int = Query(100, ge=1, le=1000)):
-    items = db.query(Booking)\
+def list_bookings(
+    db: Session = Depends(get_db), 
+    skip: int = Query(0, ge=0), 
+    limit: int = Query(500, ge=1, le=10000),
+    vehicle_id: Optional[int] = Query(None, description="Filter bookings by vehicle ID"),
+    search: Optional[str] = Query(None, description="Search across contact name, email, phone, user name/email/phone, booking ID")
+):
+    query = db.query(Booking)\
         .options(
-            joinedload(Booking.vehicle),
+            joinedload(Booking.vehicle).joinedload(Vehicle.vehicle_model).joinedload(VehicleModel.brand),
             joinedload(Booking.vehicle_group),
+            joinedload(Booking.vehicle_model).joinedload(VehicleModel.brand),
             joinedload(Booking.pickup_location),
             joinedload(Booking.dropoff_location),
             joinedload(Booking.user)
-        )\
-        .offset(skip)\
-        .limit(limit)\
-        .all()
+        )
+    
+    # Exclude soft-deleted bookings
+    query = query.filter(Booking.deleted_at == None)
+
+    # Server-side search across all relevant fields
+    if search:
+        term = f"%{search.strip()}%"
+        # Digits-only version for phone matching (strip formatting)
+        digits = re.sub(r'[\s\-\(\)\+]', '', search.strip())
+
+        # User-side conditions via subquery (avoids conflicting with joinedload's join)
+        user_conditions = [
+            User.first_name.ilike(term),
+            User.last_name.ilike(term),
+            User.email.ilike(term),
+            User.phone.ilike(term),
+        ]
+        if len(digits) >= 4:
+            user_conditions.append(User.phone.ilike(f"%{digits}%"))
+        user_match_ids = db.query(User.id).filter(or_(*user_conditions)).subquery()
+
+        # Booking-side phone conditions
+        phone_conditions = [Booking.contact_phone.ilike(term)]
+        if len(digits) >= 4:
+            phone_conditions.append(Booking.contact_phone.ilike(f"%{digits}%"))
+
+        query = query.filter(
+            or_(
+                cast(Booking.id, String) == search.strip(),  # exact booking ID
+                Booking.contact_full_name.ilike(term),
+                Booking.contact_email.ilike(term),
+                Booking.notes.ilike(term),
+                Booking.broker.ilike(term),
+                Booking.broker_id.ilike(term),
+                Booking.user_id.in_(user_match_ids),
+                *phone_conditions,
+            )
+        )
+
+    # Consistent ordering
+    query = query.order_by(Booking.id.desc())
+
+    # Apply vehicle_id filter if provided
+    if vehicle_id is not None:
+        query = query.filter(Booking.vehicle_id == vehicle_id)
+    
+    items = query.offset(skip).limit(limit).all()
     
     # Manually serialize with relationships
     result = []
@@ -290,24 +392,39 @@ def list_bookings(db: Session = Depends(get_db), skip: int = Query(0, ge=0), lim
         
         # Add vehicle info
         if booking.vehicle:
+            # Get make/model from vehicle_model if available, otherwise use legacy fields
+            make = booking.vehicle.make or ''
+            model = booking.vehicle.model or ''
+            
+            if booking.vehicle.vehicle_model:
+                if booking.vehicle.vehicle_model.brand:
+                    make = booking.vehicle.vehicle_model.brand.name
+                model = booking.vehicle.vehicle_model.name
+            
             booking_dict['vehicle'] = {
                 'id': booking.vehicle.id,
-                'make': booking.vehicle.make,
-                'model': booking.vehicle.model,
+                'make': make,
+                'model': model,
                 'year': booking.vehicle.year,
                 'license_plate': booking.vehicle.license_plate
             }
         
-        # Add vehicle group info
-        print(f"[DEBUG] Booking {booking.id}: vehicle_group_id={booking.vehicle_group_id}, has vehicle_group={booking.vehicle_group is not None}")
+        # Add vehicle group info (legacy)
         if booking.vehicle_group:
-            print(f"[DEBUG] Adding vehicle_group: id={booking.vehicle_group.id}, name={booking.vehicle_group.name}")
             booking_dict['vehicle_group'] = {
                 'id': booking.vehicle_group.id,
                 'name': booking.vehicle_group.name
             }
-        else:
-            print(f"[DEBUG] No vehicle_group for booking {booking.id}")
+        
+        # Add vehicle model info
+        if booking.vehicle_model:
+            brand_name = booking.vehicle_model.brand.name if booking.vehicle_model.brand else ''
+            booking_dict['vehicle_model'] = {
+                'id': booking.vehicle_model.id,
+                'name': booking.vehicle_model.name,
+                'brand': brand_name,
+                'display_name': f"{brand_name} {booking.vehicle_model.name}".strip()
+            }
         
         # Add pickup location info
         if booking.pickup_location:
@@ -339,14 +456,121 @@ def list_bookings(db: Session = Depends(get_db), skip: int = Query(0, ge=0), lim
     return result
 
 
+@router.get("/archived", response_model=List[Dict[str, Any]])
+def list_archived_bookings(
+    db: Session = Depends(get_db),
+    skip: int = Query(0, ge=0),
+    limit: int = Query(100, ge=1, le=1000),
+    current_admin: Admin = Depends(get_current_super_admin),
+):
+    """List all soft-deleted (archived) bookings. Super-admin only."""
+    query = db.query(Booking)\
+        .options(
+            joinedload(Booking.vehicle).joinedload(Vehicle.vehicle_model).joinedload(VehicleModel.brand),
+            joinedload(Booking.vehicle_group),
+            joinedload(Booking.vehicle_model).joinedload(VehicleModel.brand),
+            joinedload(Booking.pickup_location),
+            joinedload(Booking.dropoff_location),
+            joinedload(Booking.user)
+        )\
+        .filter(Booking.deleted_at != None)\
+        .order_by(Booking.deleted_at.desc())
+
+    items = query.offset(skip).limit(limit).all()
+
+    result = []
+    for booking in items:
+        booking_dict = to_dict(booking)
+        if booking.vehicle:
+            make = booking.vehicle.make or ''
+            model = booking.vehicle.model or ''
+            if booking.vehicle.vehicle_model:
+                if booking.vehicle.vehicle_model.brand:
+                    make = booking.vehicle.vehicle_model.brand.name
+                model = booking.vehicle.vehicle_model.name
+            booking_dict['vehicle'] = {
+                'id': booking.vehicle.id,
+                'make': make,
+                'model': model,
+                'year': booking.vehicle.year,
+                'license_plate': booking.vehicle.license_plate,
+            }
+        if booking.vehicle_group:
+            booking_dict['vehicle_group'] = {
+                'id': booking.vehicle_group.id,
+                'name': booking.vehicle_group.name,
+            }
+        if booking.vehicle_model:
+            brand_name = booking.vehicle_model.brand.name if booking.vehicle_model.brand else ''
+            booking_dict['vehicle_model'] = {
+                'id': booking.vehicle_model.id,
+                'name': booking.vehicle_model.name,
+                'brand': brand_name,
+                'display_name': f"{brand_name} {booking.vehicle_model.name}".strip()
+            }
+        if booking.pickup_location:
+            booking_dict['pickup_location'] = {
+                'id': booking.pickup_location.id,
+                'name': booking.pickup_location.name,
+                'city': booking.pickup_location.city,
+            }
+        if booking.dropoff_location:
+            booking_dict['dropoff_location'] = {
+                'id': booking.dropoff_location.id,
+                'name': booking.dropoff_location.name,
+                'city': booking.dropoff_location.city,
+            }
+        if booking.user:
+            booking_dict['user'] = {
+                'id': booking.user.id,
+                'first_name': booking.user.first_name,
+                'last_name': booking.user.last_name,
+                'email': booking.user.email,
+            }
+        result.append(booking_dict)
+
+    return result
+
+
+@router.post("/{item_id}/restore", response_model=Dict[str, Any])
+def restore_booking(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_admin: Admin = Depends(get_current_super_admin),
+):
+    """Restore (unarchive) a soft-deleted booking. Super-admin only."""
+    obj = db.query(Booking).filter(
+        Booking.id == item_id,
+        Booking.deleted_at != None,
+    ).first()
+    if not obj:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Archived booking not found",
+        )
+
+    obj.deleted_at = None
+    _create_history_entry(
+        db=db,
+        booking_id=obj.id,
+        action_type="RESTORED",
+        description=f"Booking restored from archive by admin {current_admin.username} (id={current_admin.id})",
+        changed_by_id=current_admin.id,
+    )
+    db.commit()
+    db.refresh(obj)
+    return to_dict(obj)
+
+
 @router.get("/{item_id}", response_model=Dict[str, Any])
 def get_booking(item_id: int, db: Session = Depends(get_db)):
     obj = db.query(Booking).options(
         joinedload(Booking.pickup_location),
         joinedload(Booking.dropoff_location),
         joinedload(Booking.vehicle),
-        joinedload(Booking.vehicle_group)
-    ).filter(Booking.id == item_id).first()
+        joinedload(Booking.vehicle_group),
+        joinedload(Booking.vehicle_model).joinedload(VehicleModel.brand)
+    ).filter(Booking.id == item_id, Booking.deleted_at == None).first()
     
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
@@ -369,9 +593,54 @@ def get_booking(item_id: int, db: Session = Depends(get_db)):
         booking_dict['vehicle_name'] = f"{obj.vehicle.make} {obj.vehicle.model} ({obj.vehicle.year})"
         booking_dict['vehicle_license_plate'] = obj.vehicle.license_plate
     
-    # Add vehicle group name
+    # Add vehicle group name (legacy)
     if obj.vehicle_group:
         booking_dict['vehicle_group_name'] = obj.vehicle_group.name
+    
+    # Add vehicle model info
+    if obj.vehicle_model:
+        brand_name = obj.vehicle_model.brand.name if obj.vehicle_model.brand else ''
+        booking_dict['vehicle_model_name'] = f"{brand_name} {obj.vehicle_model.name}".strip()
+        booking_dict['vehicle_model'] = {
+            'id': obj.vehicle_model.id,
+            'name': obj.vehicle_model.name,
+            'brand': brand_name,
+            'display_name': f"{brand_name} {obj.vehicle_model.name}".strip()
+        }
+    
+    # Add vehicle assignments with date ranges
+    assignments = db.query(BookingVehicleAssignment).options(
+        joinedload(BookingVehicleAssignment.vehicle),
+        joinedload(BookingVehicleAssignment.return_location)
+    ).filter(
+        BookingVehicleAssignment.booking_id == item_id
+    ).order_by(BookingVehicleAssignment.start_date).all()
+    
+    booking_dict['vehicle_assignments'] = []
+    for assignment in assignments:
+        assignment_dict = {
+            'id': assignment.id,
+            'vehicle_id': assignment.vehicle_id,
+            'start_date': assignment.start_date.isoformat() if assignment.start_date else None,
+            'end_date': assignment.end_date.isoformat() if assignment.end_date else None,
+            'odometer_reading': assignment.odometer_reading,
+            'notes': assignment.notes
+        }
+        if assignment.vehicle:
+            assignment_dict['vehicle'] = {
+                'id': assignment.vehicle.id,
+                'make': assignment.vehicle.make,
+                'model': assignment.vehicle.model,
+                'year': assignment.vehicle.year,
+                'license_plate': assignment.vehicle.license_plate
+            }
+        if assignment.return_location:
+            assignment_dict['return_location'] = {
+                'id': assignment.return_location.id,
+                'name': assignment.return_location.name,
+                'city': assignment.return_location.city
+            }
+        booking_dict['vehicle_assignments'].append(assignment_dict)
     
     return booking_dict
 
@@ -403,6 +672,26 @@ def get_booking_history(item_id: int, db: Session = Depends(get_db)):
             'changed_by': None
         }
         
+        # If this is a vehicle change, enrich with vehicle details
+        if entry.field_name == 'vehicle_id':
+            if entry.old_value:
+                try:
+                    old_vehicle_id = int(entry.old_value)
+                    old_vehicle = db.get(Vehicle, old_vehicle_id)
+                    if old_vehicle:
+                        entry_dict['old_value_display'] = f"{old_vehicle.license_plate} ({old_vehicle.make} {old_vehicle.model})"
+                except (ValueError, TypeError):
+                    pass
+            
+            if entry.new_value:
+                try:
+                    new_vehicle_id = int(entry.new_value)
+                    new_vehicle = db.get(Vehicle, new_vehicle_id)
+                    if new_vehicle:
+                        entry_dict['new_value_display'] = f"{new_vehicle.license_plate} ({new_vehicle.make} {new_vehicle.model})"
+                except (ValueError, TypeError):
+                    pass
+        
         if entry.changed_by:
             entry_dict['changed_by'] = {
                 'id': entry.changed_by.id,
@@ -419,6 +708,7 @@ def get_booking_history(item_id: int, db: Session = Depends(get_db)):
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
 async def create_booking(
     request: Request, 
+    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db),
     current_admin: Optional[Admin] = Depends(get_optional_admin)
 ):
@@ -463,6 +753,22 @@ async def create_booking(
 
     obj = Booking()
     apply_updates(obj, payload)
+    
+    # For web/public bookings (no admin), keep vehicle unassigned but preserve vehicle model
+    is_web_booking = current_admin is None
+    if is_web_booking and obj.vehicle_id:
+        # Look up the vehicle's model so we can set it on the booking
+        vehicle = db.query(Vehicle).filter(Vehicle.id == obj.vehicle_id).first()
+        if vehicle:
+            if vehicle.vehicle_model_id:
+                obj.vehicle_model_id = vehicle.vehicle_model_id
+                print(f"[DEBUG] Web booking: set vehicle_model_id={vehicle.vehicle_model_id} from vehicle {vehicle.id}")
+            if vehicle.vehicle_group_id:
+                obj.vehicle_group_id = vehicle.vehicle_group_id
+                print(f"[DEBUG] Web booking: set vehicle_group_id={vehicle.vehicle_group_id} from vehicle {vehicle.id}")
+        # Clear vehicle_id — admin will assign a specific vehicle later
+        obj.vehicle_id = None
+        print(f"[DEBUG] Web booking: cleared vehicle_id (vehicle left unassigned)")
     
     # Set user_id directly if we created/found a user
     if user:
@@ -509,6 +815,16 @@ async def create_booking(
         db.commit()
         db.refresh(obj)
         
+        # Create initial vehicle assignment if vehicle is assigned
+        if obj.vehicle_id and obj.pickup_datetime and obj.dropoff_datetime:
+            initial_assignment = BookingVehicleAssignment(
+                booking_id=obj.id,
+                vehicle_id=obj.vehicle_id,
+                start_date=obj.pickup_datetime,
+                end_date=obj.dropoff_datetime
+            )
+            db.add(initial_assignment)
+        
         # Create initial history entry for booking creation
         status_display = _format_value_for_history(obj.status)
         admin_id = current_admin.id if current_admin else None
@@ -524,7 +840,113 @@ async def create_booking(
         db.rollback()
         raise HTTPException(status_code=400, detail=str(e.orig) if getattr(e, "orig", None) else str(e))
     db.refresh(obj)
+
+    # Send confirmation email for web bookings (in background so response is immediate)
+    if is_web_booking and obj.contact_email:
+        try:
+            pickup_loc = obj.pickup_location.name if obj.pickup_location else "TBD"
+            dropoff_loc = obj.dropoff_location.name if obj.dropoff_location else "TBD"
+            # Use vehicle model name (e.g., "Toyota Prius") for the email
+            vehicle_display_name = None
+            if obj.vehicle_model_id:
+                vm = db.query(VehicleModel).options(joinedload(VehicleModel.brand)).filter(VehicleModel.id == obj.vehicle_model_id).first()
+                if vm:
+                    brand_name = vm.brand.name if vm.brand else ''
+                    vehicle_display_name = f"{brand_name} {vm.name}".strip()
+            if not vehicle_display_name and obj.vehicle_group:
+                vehicle_display_name = obj.vehicle_group.name
+            rental_days = payload.get("rental_days")
+
+            # Generate contract PDF to attach (still sync — fast, no network)
+            try:
+                pdf_bytes = _generate_booking_contract(db, obj)
+            except Exception as pdf_err:
+                print(f"[PDF] Error generating contract for booking #{obj.id}: {pdf_err}")
+                pdf_bytes = None
+
+            # Schedule the email to be sent AFTER the response is returned
+            background_tasks.add_task(
+                send_booking_confirmation,
+                booking_id=obj.id,
+                customer_name=obj.contact_full_name,
+                customer_email=obj.contact_email,
+                pickup_datetime=obj.pickup_datetime,
+                dropoff_datetime=obj.dropoff_datetime,
+                pickup_location=pickup_loc,
+                dropoff_location=dropoff_loc,
+                total_amount=float(obj.total_amount) if obj.total_amount else None,
+                currency=obj.currency or "USD",
+                rental_days=int(rental_days) if rental_days else None,
+                vehicle_group_name=vehicle_display_name,
+                pdf_attachment=pdf_bytes,
+                one_way_fee=float(obj.one_way_fee) if obj.one_way_fee else 0.0,
+                delivery_fee=float(obj.delivery_fee) if obj.delivery_fee else 0.0,
+            )
+        except Exception as e:
+            print(f"[EMAIL] Error preparing confirmation for booking #{obj.id}: {e}")
+
     return to_dict(obj)
+
+
+def _generate_booking_contract(db: Session, booking: Booking) -> bytes:
+    """Load related objects and generate PDF contract for a booking."""
+    vehicle = None
+    if booking.vehicle_id:
+        vehicle = db.query(Vehicle).options(
+            joinedload(Vehicle.vehicle_model).joinedload(VehicleModel.brand)
+        ).filter(Vehicle.id == booking.vehicle_id).first()
+
+    pickup_location = db.query(Location).get(booking.pickup_location_id) if booking.pickup_location_id else None
+    dropoff_location = db.query(Location).get(booking.dropoff_location_id) if booking.dropoff_location_id else None
+    user = db.query(User).get(booking.user_id) if booking.user_id else None
+
+    extras = db.query(BookingExtra).options(
+        joinedload(BookingExtra.extra)
+    ).filter(BookingExtra.booking_id == booking.id).all()
+
+    # Load vehicle group and vehicle model as fallback for contract display
+    vehicle_group = None
+    vehicle_model = None
+    if booking.vehicle_group_id:
+        vehicle_group = db.query(VehicleGroup).get(booking.vehicle_group_id)
+    if booking.vehicle_model_id:
+        vehicle_model = db.query(VehicleModel).options(
+            joinedload(VehicleModel.brand)
+        ).filter(VehicleModel.id == booking.vehicle_model_id).first()
+
+    return generate_contract_pdf(
+        booking=booking,
+        vehicle=vehicle,
+        pickup_location=pickup_location,
+        dropoff_location=dropoff_location,
+        extras=extras,
+        user=user,
+        vehicle_group=vehicle_group,
+        vehicle_model=vehicle_model,
+    )
+
+
+@router.get("/{item_id}/contract", response_class=Response)
+def download_booking_contract(
+    item_id: int,
+    db: Session = Depends(get_db),
+):
+    """Download the rental contract PDF for a booking."""
+    booking = db.query(Booking).filter(
+        Booking.id == item_id,
+        Booking.deleted_at == None
+    ).first()
+    if not booking:
+        raise HTTPException(status_code=404, detail="Booking not found")
+
+    pdf_bytes = _generate_booking_contract(db, booking)
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f'attachment; filename="TbilisiCars_Contract_TC-{item_id}.pdf"'
+        },
+    )
 
 
 @router.put("/{item_id}", response_model=Dict[str, Any])
@@ -534,7 +956,7 @@ def update_booking(
     db: Session = Depends(get_db),
     current_admin: Optional[Admin] = Depends(get_optional_admin)
 ):
-    obj = db.get(Booking, item_id)
+    obj = db.query(Booking).filter(Booking.id == item_id, Booking.deleted_at == None).first()
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     # If contact fields are supplied, validate them (not required on update)
@@ -548,6 +970,7 @@ def update_booking(
         'payment_status': 'Payment Status',
         'vehicle_id': 'Vehicle',
         'vehicle_group_id': 'Vehicle Group',
+        'vehicle_model_id': 'Vehicle Model',
         'pickup_location_id': 'Pickup Location',
         'dropoff_location_id': 'Dropoff Location',
         'pickup_datetime': 'Pickup Date/Time',
@@ -567,6 +990,9 @@ def update_booking(
             if old_val_formatted != new_val_formatted:
                 changes.append((field, label, old_val_formatted, new_val_formatted))
 
+    # Handle vehicle change tracking BEFORE applying updates
+    vehicle_change_data = payload.pop('_vehicle_change', None)
+    
     apply_updates(obj, payload)
     
     # Recalculate one-way fee if locations changed
@@ -577,6 +1003,11 @@ def update_booking(
     
     # Create history entries for changes
     admin_id = current_admin.id if current_admin else None
+    
+    # Handle vehicle change with proper assignment tracking
+    if vehicle_change_data:
+        _handle_vehicle_change(db, obj, vehicle_change_data, admin_id)
+    
     for field, label, old_val, new_val in changes:
         _create_history_entry(
             db=db,
@@ -618,7 +1049,7 @@ def partial_update_booking(
     current_admin: Optional[Admin] = Depends(get_optional_admin)
 ):
     """Partial update - same as PUT but semantically indicates partial updates"""
-    obj = db.get(Booking, item_id)
+    obj = db.query(Booking).filter(Booking.id == item_id, Booking.deleted_at == None).first()
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
     # If contact fields are supplied, validate them (not required on update)
@@ -626,12 +1057,16 @@ def partial_update_booking(
     if any(k in payload for k in contact_keys):
         _validate_contact_payload(payload, required=False)
 
+    # Handle vehicle change tracking BEFORE applying updates
+    vehicle_change_data = payload.pop('_vehicle_change', None)
+
     # Track changes for history
     tracked_fields = {
         'status': 'Booking Status',
         'payment_status': 'Payment Status',
         'vehicle_id': 'Vehicle',
         'vehicle_group_id': 'Vehicle Group',
+        'vehicle_model_id': 'Vehicle Model',
         'pickup_location_id': 'Pickup Location',
         'dropoff_location_id': 'Dropoff Location',
         'pickup_datetime': 'Pickup Date/Time',
@@ -661,6 +1096,11 @@ def partial_update_booking(
     
     # Create history entries for changes
     admin_id = current_admin.id if current_admin else None
+    
+    # Handle vehicle change with proper assignment tracking
+    if vehicle_change_data:
+        _handle_vehicle_change(db, obj, vehicle_change_data, admin_id)
+    
     for field, label, old_val, new_val in changes:
         _create_history_entry(
             db=db,
@@ -683,11 +1123,28 @@ def partial_update_booking(
 
 
 @router.delete("/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_booking(item_id: int, db: Session = Depends(get_db)):
-    obj = db.get(Booking, item_id)
+def delete_booking(
+    item_id: int,
+    db: Session = Depends(get_db),
+    current_admin: Admin = Depends(get_current_super_admin),  # Only super-admins (role="admin") may delete
+):
+    obj = db.query(Booking).filter(
+        Booking.id == item_id,
+        Booking.deleted_at == None
+    ).first()
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
-    db.delete(obj)
+
+    # Soft delete — stamp the timestamp and log to history instead of removing the row
+    from datetime import datetime as _dt
+    obj.deleted_at = _dt.utcnow()
+    _create_history_entry(
+        db=db,
+        booking_id=obj.id,
+        action_type="ARCHIVED",
+        description=f"Booking archived by admin {current_admin.username} (id={current_admin.id})",
+        changed_by_id=current_admin.id,
+    )
     db.commit()
     return None
 

@@ -124,7 +124,85 @@ class MinIOClient:
         except S3Error as e:
             print(f"Error uploading vehicle photo: {e}")
             return None
-    
+
+    def upload_booking_photo(self, file: BinaryIO, filename: str, booking_id: int) -> Optional[str]:
+        """
+        Upload a booking photo (pickup/delivery verification) and return the object name.
+        Uses bookings/ prefix to avoid collision with vehicle photos.
+        """
+        try:
+            file_extension = filename.split('.')[-1].lower()
+            object_name = f"bookings/{booking_id}/{uuid.uuid4().hex}.{file_extension}"
+
+            if file_extension in ['jpg', 'jpeg', 'png', 'webp']:
+                optimized_file = self._optimize_image(file, file_extension)
+                file_size = len(optimized_file.getvalue())
+                optimized_file.seek(0)
+
+                self.client.put_object(
+                    self.vehicle_photos_bucket,
+                    object_name,
+                    optimized_file,
+                    length=file_size,
+                    content_type=f"image/{file_extension}"
+                )
+            else:
+                file.seek(0)
+                self.client.put_object(
+                    self.vehicle_photos_bucket,
+                    object_name,
+                    file,
+                    length=-1,
+                    part_size=10*1024*1024
+                )
+
+            return object_name
+
+        except S3Error as e:
+            print(f"Error uploading booking photo: {e}")
+            return None
+
+    def upload_model_photo(self, file: BinaryIO, filename: str, model_id: int) -> Optional[str]:
+        """
+        Upload a vehicle model photo and return the object name
+        """
+        try:
+            # Generate unique filename
+            file_extension = filename.split('.')[-1].lower()
+            object_name = f"vehicle-models/{model_id}/{uuid.uuid4().hex}.{file_extension}"
+
+            # Optimize image if it's an image file
+            if file_extension in ['jpg', 'jpeg', 'png', 'webp']:
+                optimized_file = self._optimize_image(file, file_extension)
+                file_size = len(optimized_file.getvalue())
+                optimized_file.seek(0)
+
+                self.client.put_object(
+                    self.vehicle_photos_bucket,
+                    object_name,
+                    optimized_file,
+                    length=file_size,
+                    content_type=f"image/{file_extension}"
+                )
+            else:
+                file.seek(0)
+                self.client.put_object(
+                    self.vehicle_photos_bucket,
+                    object_name,
+                    file,
+                    length=-1,
+                    part_size=10*1024*1024
+                )
+
+            return object_name
+
+        except S3Error as e:
+            print(f"Error uploading model photo (S3): {e}")
+            return None
+        except Exception as e:
+            print(f"Error uploading model photo (general): {e}")
+            return None
+
     def _optimize_image(self, file: BinaryIO, file_extension: str) -> io.BytesIO:
         """
         Optimize image by resizing and compressing

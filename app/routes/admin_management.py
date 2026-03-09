@@ -35,7 +35,7 @@ class CreateAdminRequest(BaseModel):
     email: EmailStr
     full_name: str
     password: str
-    admin_role: str = "guest_admin"
+    admin_role: str = "rental_agent"
     can_manage_vehicles: bool = True
     can_manage_bookings: bool = True
     can_manage_users: bool = False
@@ -74,6 +74,16 @@ def admin_to_response(admin: Admin) -> AdminResponse:
         last_login=admin.last_login.isoformat() if admin.last_login else None,
         created_at=admin.created_at.isoformat()
     )
+
+
+@router.get("/admins/list")
+async def get_admins_list(
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db)
+):
+    """Get simple list of admins (id, name, email) for dropdowns. Accessible by any admin."""
+    admins = db.query(Admin).filter(Admin.is_active == True).order_by(Admin.full_name).all()
+    return [{"id": admin.id, "name": admin.full_name, "email": admin.email} for admin in admins]
 
 
 @router.get("/admins", response_model=List[AdminResponse])
@@ -127,7 +137,7 @@ async def create_admin(
         )
     
     # Validate admin role
-    valid_roles = ["super_admin", "admin", "guest_admin"]
+    valid_roles = ["admin", "regional_manager", "service_manager", "rental_agent"]
     if request.admin_role not in valid_roles:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
@@ -172,11 +182,11 @@ async def update_admin(
             detail="Admin not found"
         )
     
-    # Prevent super admin from removing their own super admin role
-    if admin.id == current_admin.id and request.admin_role and request.admin_role != "super_admin":
+    # Prevent admin from removing their own admin role
+    if admin.id == current_admin.id and request.admin_role and request.admin_role != "admin":
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Cannot remove your own super admin privileges"
+            detail="Cannot remove your own admin privileges"
         )
     
     # Update fields
@@ -208,7 +218,7 @@ async def update_admin(
         admin.hashed_password = get_password_hash(request.password)
     
     if request.admin_role is not None:
-        valid_roles = ["super_admin", "admin", "guest_admin"]
+        valid_roles = ["admin", "regional_manager", "service_manager", "rental_agent"]
         if request.admin_role not in valid_roles:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,

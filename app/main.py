@@ -11,7 +11,10 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:3000", 
         "http://127.0.0.1:3000",
-        "https://tbilisicars.live"
+        "https://tbilisicars.live",
+        "https://www.tbilisicars.live",
+        "https://tbilisicars.com",
+        "https://www.tbilisicars.com",
     ],  # Frontend URLs
     allow_credentials=True,  # Allow credentials for auth
     allow_methods=["*"],  # Allow all methods
@@ -21,18 +24,21 @@ app.add_middleware(
 # Initialize email parsers
 from app.email_parsers import setup
 from app.email_parsers.monitor import email_monitor_service
+from app.core.booking_archiver import booking_archiver_service
 
 
 @app.on_event("startup")
 async def startup_event():
     """Start background services on app startup"""
     await email_monitor_service.start()
+    await booking_archiver_service.start()
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
     """Stop background services on app shutdown"""
     await email_monitor_service.stop()
+    await booking_archiver_service.stop()
 
 
 @app.get("/health")
