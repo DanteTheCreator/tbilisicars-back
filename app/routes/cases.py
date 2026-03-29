@@ -332,7 +332,7 @@ async def upload_attachment(
     upload_dir.mkdir(parents=True, exist_ok=True)
     
     # Generate unique filename
-    timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     file_extension = Path(file.filename).suffix
     unique_filename = f"{timestamp}_{file.filename}"
     file_path = upload_dir / unique_filename

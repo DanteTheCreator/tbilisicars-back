@@ -4,7 +4,7 @@ from datetime import datetime
 from typing import Optional, List
 import enum
 
-from sqlalchemy import String, Text, DateTime, ForeignKey, Enum, Integer, Table, Column
+from sqlalchemy import String, Text, DateTime, ForeignKey, Enum, Integer, Table, Column, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base, TimestampMixin
@@ -29,7 +29,7 @@ case_assignments = Table(
     Base.metadata,
     Column("case_id", Integer, ForeignKey("cases.id", ondelete="CASCADE"), primary_key=True),
     Column("admin_id", Integer, ForeignKey("admins.id", ondelete="CASCADE"), primary_key=True),
-    Column("assigned_at", DateTime, default=datetime.utcnow, nullable=False)
+    Column("assigned_at", DateTime, server_default=func.now(), nullable=False)
 )
 
 

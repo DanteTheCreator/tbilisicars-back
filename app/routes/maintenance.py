@@ -25,7 +25,7 @@ def _add_service_history(
     entry = VehicleHistory(
         vehicle_id=vehicle_id,
         changed_by_id=changed_by_id,
-        changed_at=datetime.utcnow(),
+        changed_at=datetime.now(),
         action_type=action_type,
         field_name=field_name,
         old_value=old_value,

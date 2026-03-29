@@ -5,13 +5,18 @@ from datetime import datetime
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, EmailStr
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 
 from app.core.auth import get_current_admin, get_password_hash, get_current_super_admin
 from app.core.db import get_db
 from app.models.admin import Admin
 
 router = APIRouter(prefix="/admin", tags=["Admin Management"])
+
+
+class GroupBrief(BaseModel):
+    id: int
+    name: str
 
 
 class AdminResponse(BaseModel):
@@ -26,6 +31,16 @@ class AdminResponse(BaseModel):
     can_manage_users: bool
     can_view_reports: bool
     can_manage_settings: bool
+    can_manage_rates: bool
+    can_manage_extras: bool
+    can_manage_promotions: bool
+    can_manage_locations: bool
+    can_view_reviews: bool
+    can_manage_damages: bool
+    can_manage_tasks: bool
+    can_view_calendar: bool
+    can_manage_cases: bool
+    groups: List[GroupBrief]
     last_login: Optional[str]
     created_at: str
 
@@ -59,6 +74,7 @@ class UpdateAdminRequest(BaseModel):
 
 def admin_to_response(admin: Admin) -> AdminResponse:
     """Convert Admin model to AdminResponse."""
+    groups = [GroupBrief(id=g.id, name=g.name) for g in admin.groups] if admin.groups else []
     return AdminResponse(
         id=admin.id,
         username=admin.username,
@@ -71,6 +87,16 @@ def admin_to_response(admin: Admin) -> AdminResponse:
         can_manage_users=admin.can_manage_users,
         can_view_reports=admin.can_view_reports,
         can_manage_settings=admin.can_manage_settings,
+        can_manage_rates=admin.can_manage_rates,
+        can_manage_extras=admin.can_manage_extras,
+        can_manage_promotions=admin.can_manage_promotions,
+        can_manage_locations=admin.can_manage_locations,
+        can_view_reviews=admin.can_view_reviews,
+        can_manage_damages=admin.can_manage_damages,
+        can_manage_tasks=admin.can_manage_tasks,
+        can_view_calendar=admin.can_view_calendar,
+        can_manage_cases=admin.can_manage_cases,
+        groups=groups,
         last_login=admin.last_login.isoformat() if admin.last_login else None,
         created_at=admin.created_at.isoformat()
     )
@@ -92,8 +118,20 @@ async def list_all_admins(
     db: Session = Depends(get_db)
 ):
     """Get list of all admins. Only accessible by super admins."""
-    admins = db.query(Admin).order_by(Admin.created_at.desc()).all()
-    return [admin_to_response(admin) for admin in admins]
+    admins = (
+        db.query(Admin)
+        .options(joinedload(Admin.groups))
+        .order_by(Admin.created_at.desc())
+        .all()
+    )
+    # Deduplicate from joinedload
+    seen = set()
+    unique = []
+    for a in admins:
+        if a.id not in seen:
+            seen.add(a.id)
+            unique.append(a)
+    return [admin_to_response(admin) for admin in unique]
 
 
 @router.get("/admins/{admin_id}", response_model=AdminResponse)
@@ -103,7 +141,12 @@ async def get_admin(
     db: Session = Depends(get_db)
 ):
     """Get specific admin by ID. Only accessible by super admins."""
-    admin = db.query(Admin).filter(Admin.id == admin_id).first()
+    admin = (
+        db.query(Admin)
+        .options(joinedload(Admin.groups))
+        .filter(Admin.id == admin_id)
+        .first()
+    )
     if not admin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

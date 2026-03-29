@@ -69,7 +69,7 @@ class BookingArchiverService:
     def _archive_completed_bookings() -> int:
         db: Session = SessionLocal()
         try:
-            cutoff = datetime.utcnow() - timedelta(hours=ARCHIVE_AFTER_HOURS)
+            cutoff = datetime.now() - timedelta(hours=ARCHIVE_AFTER_HOURS)
 
             bookings = (
                 db.query(Booking)
@@ -81,7 +81,7 @@ class BookingArchiverService:
                 .all()
             )
 
-            now = datetime.utcnow()
+            now = datetime.now()
             for booking in bookings:
                 booking.deleted_at = now
                 logger.debug(

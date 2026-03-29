@@ -1,8 +1,8 @@
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func, and_
 from datetime import datetime, timedelta
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 
 from app.core.auth import get_current_admin
 from app.core.db import get_db
@@ -10,12 +10,14 @@ from app.models.admin import Admin
 from app.models.vehicle import Vehicle
 from app.models.booking import Booking
 from app.models.user import User
+from app.models.location import Location
 from app.models.payment import Payment, PaymentStatusEnum
 
 router = APIRouter()
 
 @router.get("/admin/stats")
 async def get_admin_stats(
+    region: Optional[str] = Query(None, description="Filter stats by region/city name"),
     db: Session = Depends(get_db),
     current_admin: Admin = Depends(get_current_admin)
 ) -> Dict[str, Any]:
@@ -23,8 +25,19 @@ async def get_admin_stats(
     Get dashboard statistics for admin panel
     """
     try:
+        # Resolve region location IDs if filtering by region
+        region_location_ids = None
+        if region and region != 'ALL':
+            region_location_ids = [
+                loc.id for loc in
+                db.query(Location.id).filter(Location.city == region).all()
+            ]
+
         # Total vehicles
-        total_vehicles = db.query(Vehicle).count()
+        vehicles_query = db.query(Vehicle)
+        if region_location_ids is not None:
+            vehicles_query = vehicles_query.filter(Vehicle.location_id.in_(region_location_ids))
+        total_vehicles = vehicles_query.count()
         
         # Active bookings (current)
         now = datetime.now()
@@ -35,6 +48,10 @@ async def get_admin_stats(
                 Booking.status.in_(['CONFIRMED', 'DELIVERED'])
             )
         )
+        if region_location_ids is not None:
+            active_bookings_query = active_bookings_query.filter(
+                Booking.pickup_location_id.in_(region_location_ids)
+            )
         active_bookings = active_bookings_query.count()
         
         # Get vehicle IDs that are currently assigned to active bookings
@@ -54,12 +71,17 @@ async def get_admin_stats(
         start_of_month = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         
         # Query revenue per currency
-        monthly_revenue_by_currency = db.query(
+        revenue_query = db.query(
             Booking.currency,
             func.sum(Booking.total_amount)
         ).filter(
             Booking.created_at >= start_of_month
-        ).group_by(Booking.currency).all()
+        )
+        if region_location_ids is not None:
+            revenue_query = revenue_query.filter(
+                Booking.pickup_location_id.in_(region_location_ids)
+            )
+        monthly_revenue_by_currency = revenue_query.group_by(Booking.currency).all()
         
         # Create dict for monthly revenue by currency
         monthly_revenue = {
@@ -78,14 +100,19 @@ async def get_admin_stats(
         start_of_last_month = (start_of_month - timedelta(days=1)).replace(day=1)
         end_of_last_month = start_of_month - timedelta(seconds=1)
         
-        last_month_revenue_query = db.query(
+        last_month_query = db.query(
             func.sum(Booking.total_amount)
         ).filter(
             and_(
                 Booking.created_at >= start_of_last_month,
                 Booking.created_at <= end_of_last_month
             )
-        ).scalar() or 0
+        )
+        if region_location_ids is not None:
+            last_month_query = last_month_query.filter(
+                Booking.pickup_location_id.in_(region_location_ids)
+            )
+        last_month_revenue_query = last_month_query.scalar() or 0
         
         # Revenue growth percentage
         revenue_growth = 0
@@ -96,19 +123,29 @@ async def get_admin_stats(
         start_of_week = now - timedelta(days=now.weekday())
         start_of_week = start_of_week.replace(hour=0, minute=0, second=0, microsecond=0)
         
-        bookings_this_week = db.query(Booking).filter(
+        this_week_query = db.query(Booking).filter(
             Booking.created_at >= start_of_week
-        ).count()
+        )
+        if region_location_ids is not None:
+            this_week_query = this_week_query.filter(
+                Booking.pickup_location_id.in_(region_location_ids)
+            )
+        bookings_this_week = this_week_query.count()
         
         start_of_last_week = start_of_week - timedelta(days=7)
         end_of_last_week = start_of_week - timedelta(seconds=1)
         
-        bookings_last_week = db.query(Booking).filter(
+        last_week_query = db.query(Booking).filter(
             and_(
                 Booking.created_at >= start_of_last_week,
                 Booking.created_at <= end_of_last_week
             )
-        ).count()
+        )
+        if region_location_ids is not None:
+            last_week_query = last_week_query.filter(
+                Booking.pickup_location_id.in_(region_location_ids)
+            )
+        bookings_last_week = last_week_query.count()
         
         # Booking growth percentage
         booking_growth = 0
@@ -121,8 +158,13 @@ async def get_admin_stats(
             utilization_rate = (active_bookings / total_vehicles) * 100
         
         # Recent activity (last 10 bookings)
-        recent_bookings = db.query(Booking)\
-            .options(joinedload(Booking.vehicle), joinedload(Booking.vehicle_group))\
+        recent_query = db.query(Booking)\
+            .options(joinedload(Booking.vehicle), joinedload(Booking.vehicle_group))
+        if region_location_ids is not None:
+            recent_query = recent_query.filter(
+                Booking.pickup_location_id.in_(region_location_ids)
+            )
+        recent_bookings = recent_query\
             .order_by(Booking.created_at.desc())\
             .limit(10)\
             .all()

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
-from typing import List
+from typing import List, Optional
 
 from enum import Enum as PyEnum
 from sqlalchemy import String, Enum as SAEnum, Integer, ForeignKey, Date, Numeric, Boolean
@@ -22,7 +22,11 @@ class Promo(Base, TimestampMixin):
     # Link to vehicle group
     vehicle_group_id: Mapped[int | None] = mapped_column(ForeignKey("vehiclegroup.id", ondelete="CASCADE"), nullable=True, index=True)
 
+    # Link to a specific rate (optional — if set, promo only applies when this rate is used)
+    rate_id: Mapped[int | None] = mapped_column(ForeignKey("rate.id", ondelete="CASCADE"), nullable=True, index=True)
+
     discount_type: Mapped[DiscountTypeEnum] = mapped_column(SAEnum(DiscountTypeEnum))
+    # value can be positive (markup/surcharge) or negative (discount)
     value: Mapped[float] = mapped_column(Numeric(10, 2))
     currency: Mapped[str | None] = mapped_column(String(3), nullable=True)  # for fixed
 
@@ -35,6 +39,7 @@ class Promo(Base, TimestampMixin):
 
     # Relations
     vehicle_group: Mapped["VehicleGroup"] = relationship(back_populates="promos", foreign_keys=[vehicle_group_id])
+    rate: Mapped[Optional["Rate"]] = relationship(foreign_keys=[rate_id])
     bookings: Mapped[List["BookingPromo"]] = relationship(back_populates="promo", cascade="all, delete-orphan")
 
 

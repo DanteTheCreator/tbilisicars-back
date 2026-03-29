@@ -5,6 +5,7 @@ Generates a professional rental agreement PDF with booking details and legal ter
 from __future__ import annotations
 
 import io
+import math
 from datetime import datetime
 from typing import Optional
 
@@ -167,7 +168,7 @@ def generate_contract_pdf(booking, vehicle=None, pickup_location=None,
     ))
 
     # Contract number & date
-    contract_date = datetime.utcnow().strftime("%B %d, %Y")
+    contract_date = datetime.now().strftime("%B %d, %Y")
     booking_id = getattr(booking, 'id', 'N/A')
     created = getattr(booking, 'created_at', None)
     booking_date = created.strftime("%B %d, %Y") if created else contract_date
@@ -245,6 +246,8 @@ def generate_contract_pdf(booking, vehicle=None, pickup_location=None,
     vehicle_name = "—"
     license_plate = "—"
     transmission = "—"
+    vehicle_fuel = "—"
+    vehicle_vin = "—"
 
     if vehicle:
         brand = getattr(vehicle, 'brand_name', '') or ''
@@ -253,6 +256,9 @@ def generate_contract_pdf(booking, vehicle=None, pickup_location=None,
         license_plate = getattr(vehicle, 'license_plate', None) or "—"
         tr = getattr(vehicle, 'transmission', None)
         transmission = (tr.value if hasattr(tr, 'value') else str(tr or "—")).title()
+        ft = getattr(vehicle, 'fuel_type', None)
+        vehicle_fuel = (ft.value if hasattr(ft, 'value') else str(ft or "—")).title()
+        vehicle_vin = getattr(vehicle, 'vin', None) or "—"
     else:
         # Fallback: use vehicle_model + vehicle_group when no specific vehicle assigned
         if vehicle_model:
@@ -260,6 +266,9 @@ def generate_contract_pdf(booking, vehicle=None, pickup_location=None,
             brand_name = getattr(brand, 'name', '') if brand else ''
             model_name = getattr(vehicle_model, 'name', '') or ''
             vehicle_name = f"{brand_name} {model_name}".strip() or "—"
+            ft = getattr(vehicle_model, 'fuel_type', None)
+            if ft:
+                vehicle_fuel = ft.title()
         elif vehicle_group:
             vehicle_name = getattr(vehicle_group, 'name', None) or "—"
 
@@ -267,12 +276,20 @@ def generate_contract_pdf(booking, vehicle=None, pickup_location=None,
             tr = getattr(vehicle_group, 'transmission', None)
             if tr:
                 transmission = tr.title()
+            ft = getattr(vehicle_group, 'fuel_type', None)
+            if ft and vehicle_fuel == "—":
+                vehicle_fuel = ft.title()
 
     vehicle_rows = [
         [
             _field_pair("Vehicle", vehicle_name, styles),
-            _field_pair("Transmission", transmission, styles),
             _field_pair("License Plate", license_plate, styles),
+            _field_pair("Transmission", transmission, styles),
+        ],
+        [
+            _field_pair("Fuel Type", vehicle_fuel, styles),
+            _field_pair("VIN", vehicle_vin, styles),
+            _field_pair("", "", styles),
         ],
     ]
 
@@ -306,7 +323,7 @@ def generate_contract_pdf(booking, vehicle=None, pickup_location=None,
 
     rental_days = 0
     if pickup_dt and dropoff_dt:
-        rental_days = max(1, (dropoff_dt - pickup_dt).days)
+        rental_days = max(2, math.ceil((dropoff_dt - pickup_dt).total_seconds() / 86400))
 
     pickup_loc_name = "—"
     dropoff_loc_name = "—"
@@ -640,7 +657,7 @@ def generate_contract_pdf(booking, vehicle=None, pickup_location=None,
         spaceAfter=3 * mm
     ))
     elements.append(Paragraph(
-        "TbilisiCars LLC  •  Tbilisi, Georgia  •  +995 591 00 26 30  •  info@tbilisicars.com",
+        "TbilisiCars LLC  •  Tbilisi, Georgia  •  +995 591 00 26 30  •  reservations@tbilisicars.com",
         styles['FooterText']
     ))
     elements.append(Paragraph(

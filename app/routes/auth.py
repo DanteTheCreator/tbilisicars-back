@@ -20,6 +20,7 @@ from app.core.auth import (
 from app.core.config import get_settings
 from app.core.db import get_db
 from app.models.admin import Admin
+from sqlalchemy.orm import joinedload
 
 router = APIRouter(prefix="/auth", tags=["Authentication"])
 
@@ -36,6 +37,11 @@ class LoginResponse(BaseModel):
     access_token: str
     token_type: str
     admin: Dict[str, Any]
+
+
+class AdminGroupBrief(BaseModel):
+    id: int
+    name: str
 
 
 class AdminInfo(BaseModel):
@@ -59,6 +65,8 @@ class AdminInfo(BaseModel):
     can_manage_damages: bool
     can_manage_tasks: bool
     can_view_calendar: bool
+    can_manage_cases: bool
+    groups: list[AdminGroupBrief]
     last_login: str | None
 
 
@@ -96,6 +104,21 @@ async def login(
         expires_delta=access_token_expires
     )
     
+    # Eagerly load groups for response
+    db.refresh(admin)
+    admin_groups = []
+    try:
+        admin_with_groups = (
+            db.query(Admin)
+            .options(joinedload(Admin.groups))
+            .filter(Admin.id == admin.id)
+            .first()
+        )
+        if admin_with_groups:
+            admin_groups = [{"id": g.id, "name": g.name} for g in admin_with_groups.groups]
+    except Exception:
+        pass
+
     return LoginResponse(
         access_token=access_token,
         token_type="bearer",
@@ -120,6 +143,8 @@ async def login(
             "can_manage_damages": admin.can_manage_damages,
             "can_manage_tasks": admin.can_manage_tasks,
             "can_view_calendar": admin.can_view_calendar,
+            "can_manage_cases": admin.can_manage_cases,
+            "groups": admin_groups,
             "last_login": admin.last_login.isoformat() if admin.last_login else None
         }
     )
@@ -127,9 +152,20 @@ async def login(
 
 @router.get("/me", response_model=AdminInfo)
 async def get_current_user_info(
-    current_admin: Admin = Depends(get_current_admin)
+    current_admin: Admin = Depends(get_current_admin),
+    db: Session = Depends(get_db),
 ):
     """Get current admin information."""
+    admin_with_groups = (
+        db.query(Admin)
+        .options(joinedload(Admin.groups))
+        .filter(Admin.id == current_admin.id)
+        .first()
+    )
+    groups = []
+    if admin_with_groups:
+        groups = [AdminGroupBrief(id=g.id, name=g.name) for g in admin_with_groups.groups]
+
     return AdminInfo(
         id=current_admin.id,
         username=current_admin.username,
@@ -151,6 +187,8 @@ async def get_current_user_info(
         can_manage_damages=current_admin.can_manage_damages,
         can_manage_tasks=current_admin.can_manage_tasks,
         can_view_calendar=current_admin.can_view_calendar,
+        can_manage_cases=current_admin.can_manage_cases,
+        groups=groups,
         last_login=current_admin.last_login.isoformat() if current_admin.last_login else None
     )
 

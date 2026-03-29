@@ -25,6 +25,8 @@ GOOGLE_SERVICE_ACCOUNT_FILE = os.environ.get("GOOGLE_SERVICE_ACCOUNT_FILE", "/ap
 SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
+RESERVATIONS_EMAIL = "reservations@tbilisicars.com"
+
 
 def _get_gmail_service():
     """Build a Gmail API service using a service account with domain-wide delegation."""
@@ -71,14 +73,14 @@ def _send_via_gmail_api(msg: MIMEMultipart, recipient: str) -> bool:
 def _send_via_smtp(msg: MIMEMultipart, recipient: str) -> bool:
     """Send email via SMTP (original method, requires SMTP ports to be open)."""
     try:
+        recipients = [recipient]
+        if RESERVATIONS_EMAIL and RESERVATIONS_EMAIL != recipient:
+            recipients.append(RESERVATIONS_EMAIL)
         with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as server:
             server.starttls()
             server.login(GMAIL_ADDRESS, GMAIL_APP_PASSWORD)
-            server.sendmail(GMAIL_ADDRESS, recipient, msg.as_string())
+            server.sendmail(GMAIL_ADDRESS, recipients, msg.as_string())
         return True
-    except Exception as e:
-        print(f"[EMAIL] SMTP send failed: {e}")
-        return False
     except Exception as e:
         print(f"[EMAIL] SMTP send failed: {e}")
         return False
@@ -133,9 +135,11 @@ def send_booking_confirmation(
         return False
 
     msg = MIMEMultipart("mixed")
-    msg["From"] = f"TbilisiCars <{GMAIL_ADDRESS}>"
+    msg["From"] = f"Tbilisicars <{GMAIL_ADDRESS}>"
     msg["To"] = customer_email
-    msg["Subject"] = f"Booking Confirmation #{booking_id} — TbilisiCars"
+    msg["Subject"] = f"Booking Confirmation #{booking_id} — Tbilisicars"
+    if RESERVATIONS_EMAIL and RESERVATIONS_EMAIL != customer_email:
+        msg["Bcc"] = RESERVATIONS_EMAIL
 
     pickup_str = _format_datetime(pickup_datetime)
     dropoff_str = _format_datetime(dropoff_datetime)
@@ -148,7 +152,7 @@ def send_booking_confirmation(
     # Plain text version
     text = f"""Hi {customer_name},
 
-Thank you for choosing TbilisiCars! Your reservation is confirmed!
+Thank you for choosing Tbilisicars! Your reservation is confirmed!
 Please see the attached PDF for your confirmed contract.
 
 BOOKING DETAILS
@@ -167,8 +171,8 @@ NEED HELP?
 
 Thank you for trusting us with your Georgian adventure!
 
-— The TbilisiCars Team
-https://tbilisicars.live
+— The Tbilisicars Team
+https://tbilisicars.com
 """
 
     # HTML version
@@ -183,7 +187,7 @@ https://tbilisicars.live
         <!-- Header -->
         <tr>
           <td style="background:#1a1a2e;padding:28px 32px;text-align:center;">
-            <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:700;letter-spacing:0.5px;">TbilisiCars</h1>
+            <h1 style="color:#ffffff;margin:0;font-size:24px;font-weight:700;letter-spacing:0.5px;">Tbilisicars</h1>
             <p style="color:#a0a0b8;margin:6px 0 0;font-size:13px;">Your Georgian adventure starts here</p>
           </td>
         </tr>
@@ -191,7 +195,7 @@ https://tbilisicars.live
         <tr>
           <td style="padding:32px;">
             <p style="font-size:16px;color:#333;margin:0 0 8px;">Hi <strong>{customer_name}</strong>,</p>
-            <p style="font-size:15px;color:#555;margin:0 0 24px;line-height:1.5;">Thank you for choosing TbilisiCars! Your reservation is confirmed! Please see the attached PDF for your confirmed contract.</p>
+            <p style="font-size:15px;color:#555;margin:0 0 24px;line-height:1.5;">Thank you for choosing Tbilisicars! Your reservation is confirmed! Please see the attached PDF for your confirmed contract.</p>
 
             <table width="100%" cellpadding="0" cellspacing="0" style="background:#f8f9fb;border-radius:10px;padding:4px;">
               <tr>
@@ -244,7 +248,7 @@ https://tbilisicars.live
         <tr>
           <td style="background:#f8f9fb;padding:20px 32px;text-align:center;border-top:1px solid #eee;">
             <p style="margin:0;font-size:12px;color:#999;">
-              &copy; TbilisiCars &middot; <a href="https://tbilisicars.live" style="color:#1a73e8;text-decoration:none;">tbilisicars.live</a>
+              &copy; Tbilisicars &middot; <a href="https://tbilisicars.com" style="color:#1a73e8;text-decoration:none;">tbilisicars.com</a>
             </p>
           </td>
         </tr>
@@ -266,7 +270,7 @@ https://tbilisicars.live
         pdf_part = MIMEApplication(pdf_attachment, _subtype="pdf")
         pdf_part.add_header(
             "Content-Disposition", "attachment",
-            filename=f"TbilisiCars_Contract_TC-{booking_id}.pdf"
+            filename=f"Tbilisicars_Contract_TC-{booking_id}.pdf"
         )
         msg.attach(pdf_part)
 

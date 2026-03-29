@@ -4,7 +4,7 @@ import os
 import sys
 from typing import Any, Dict, List
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, status
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 
@@ -15,6 +15,8 @@ from app.models.vehicle_model import VehicleModel
 from app.models.vehicle_history import VehicleHistory
 from app.models.booking import Booking, BookingStatusEnum
 from app.models.rate import Rate, RateTier
+from app.models.document import VehicleDocument, DocumentTypeEnum
+from app.core.minio import minio_client
 from .utils import get_db, to_dict, apply_updates
 from .auth import get_current_admin
 
@@ -95,15 +97,100 @@ def get_vehicle_history(item_id: int, db: Session = Depends(get_db)):
 
 @router.get("/{item_id}/files")
 def get_vehicle_files(item_id: int, db: Session = Depends(get_db)):
-    """Get all files for a vehicle - placeholder endpoint"""
-    # Check if vehicle exists
+    """Get all files for a vehicle"""
     vehicle = db.get(Vehicle, item_id)
     if not vehicle:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
-    
-    # TODO: Implement file storage for vehicles
-    # For now, return empty list
-    return []
+
+    docs = db.query(VehicleDocument).filter(VehicleDocument.vehicle_id == item_id).all()
+    result = []
+    for doc in docs:
+        url = None
+        if doc.file_path:
+            url = minio_client.get_presigned_url(
+                minio_client.vehicle_documents_bucket, doc.file_path
+            )
+        d = to_dict(doc)
+        d["url"] = url
+        result.append(d)
+    return result
+
+
+@router.post("/{item_id}/files")
+async def upload_vehicle_files(
+    item_id: int,
+    files: list[UploadFile] = File(...),
+    document_type: str = "OTHER",
+    db: Session = Depends(get_db),
+):
+    """Upload one or more files for a vehicle"""
+    vehicle = db.get(Vehicle, item_id)
+    if not vehicle:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Vehicle not found")
+
+    allowed_extensions = {'jpg', 'jpeg', 'png', 'webp', 'pdf', 'doc', 'docx', 'xls', 'xlsx', 'txt'}
+    max_file_size = 20 * 1024 * 1024  # 20MB
+
+    uploaded = []
+    errors = []
+
+    try:
+        doc_type = DocumentTypeEnum(document_type)
+    except ValueError:
+        doc_type = DocumentTypeEnum.OTHER
+
+    for file in files:
+        ext = file.filename.rsplit('.', 1)[-1].lower() if '.' in (file.filename or '') else ''
+        if ext not in allowed_extensions:
+            errors.append(f"{file.filename}: invalid type. Allowed: {', '.join(sorted(allowed_extensions))}")
+            continue
+
+        content = await file.read()
+        if len(content) > max_file_size:
+            errors.append(f"{file.filename}: too large (max 20MB)")
+            continue
+        await file.seek(0)
+
+        object_name = minio_client.upload_document(file.file, file.filename, "vehicle-files", item_id)
+        if not object_name:
+            errors.append(f"{file.filename}: upload failed")
+            continue
+
+        doc = VehicleDocument(
+            vehicle_id=item_id,
+            type=doc_type,
+            title=file.filename,
+            file_path=object_name,
+        )
+        db.add(doc)
+        db.commit()
+        db.refresh(doc)
+
+        d = to_dict(doc)
+        d["url"] = minio_client.get_presigned_url(
+            minio_client.vehicle_documents_bucket, object_name
+        )
+        uploaded.append(d)
+
+    return {"uploaded": uploaded, "errors": errors}
+
+
+@router.delete("/{item_id}/files/{file_id}")
+def delete_vehicle_file(item_id: int, file_id: int, db: Session = Depends(get_db)):
+    """Delete a vehicle file"""
+    doc = db.query(VehicleDocument).filter(
+        VehicleDocument.id == file_id,
+        VehicleDocument.vehicle_id == item_id,
+    ).first()
+    if not doc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="File not found")
+
+    if doc.file_path:
+        minio_client.delete_object(minio_client.vehicle_documents_bucket, doc.file_path)
+
+    db.delete(doc)
+    db.commit()
+    return {"detail": "File deleted"}
 
 
 def _get_rate_starting_prices(db: Session, vehicle_model_ids: list[int]) -> dict[int, float]:

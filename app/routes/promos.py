@@ -76,8 +76,19 @@ def get_promo(item_id: int, db: Session = Depends(get_db)):
     return to_dict(obj)
 
 
+def _validate_promo_dates(payload: Dict[str, Any]):
+    sd = payload.get("start_date")
+    ed = payload.get("end_date")
+    if sd and ed:
+        s = date.fromisoformat(sd) if isinstance(sd, str) else sd
+        e = date.fromisoformat(ed) if isinstance(ed, str) else ed
+        if e < s:
+            raise HTTPException(status_code=422, detail="end_date must not be before start_date")
+
+
 @router.post("/", status_code=status.HTTP_201_CREATED, response_model=Dict[str, Any])
 def create_promo(payload: Dict[str, Any], db: Session = Depends(get_db)):
+    _validate_promo_dates(payload)
     obj = Promo()
     apply_updates(obj, payload)
     db.add(obj)
@@ -91,6 +102,7 @@ def update_promo(item_id: int, payload: Dict[str, Any], db: Session = Depends(ge
     obj = db.get(Promo, item_id)
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Promo not found")
+    _validate_promo_dates(payload)
     apply_updates(obj, payload)
     db.commit()
     db.refresh(obj)

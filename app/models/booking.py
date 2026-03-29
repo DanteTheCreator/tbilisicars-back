@@ -72,6 +72,9 @@ class Booking(Base, TimestampMixin):
 
     # Amounts already present: total_amount and currency
 
+    # Source of the booking: 'web', 'admin', or 'broker'
+    source: Mapped[str | None] = mapped_column(String(20), nullable=True, index=True)
+
     notes: Mapped[str | None] = mapped_column(String(1000), nullable=True)
     pickup_photo: Mapped[str | None] = mapped_column(String(500), nullable=True)
     return_photo: Mapped[str | None] = mapped_column(String(500), nullable=True)
@@ -126,6 +129,7 @@ class Extra(Base, TimestampMixin):
         default=ExtraPricingTypeEnum.PER_DAY, server_default="per_day"
     )
     max_quantity: Mapped[int] = mapped_column(Integer, default=1)
+    max_days: Mapped[int | None] = mapped_column(Integer, nullable=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     bookings: Mapped[List["BookingExtra"]] = relationship(back_populates="extra")

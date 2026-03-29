@@ -85,7 +85,8 @@ class BookingEmailProcessor:
             contact_last_name=parsed.customer_last_name,
             contact_email=parsed.customer_email,
             contact_phone=parsed.customer_phone,
-            notes=self._build_notes(parsed)
+            notes=self._build_notes(parsed),
+            source='broker'
         )
         
         db.add(booking)

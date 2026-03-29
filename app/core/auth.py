@@ -96,7 +96,7 @@ def authenticate_admin(db: Session, username: str, password: str) -> Optional[Ad
         return None
     
     # Update last login
-    admin.last_login = datetime.utcnow()
+    admin.last_login = datetime.now()
     db.commit()
     
     return admin
@@ -204,17 +204,36 @@ def require_role(required_role: str):
 
 
 def require_permission(permission: str):
-    """Decorator to require specific permission."""
-    def permission_dependency(current_admin: Admin = Depends(get_current_admin)) -> Admin:
+    """Decorator to require specific permission. Checks admin's own permissions
+    and also permissions inherited from any admin groups they belong to."""
+    def permission_dependency(
+        current_admin: Admin = Depends(get_current_admin),
+        db: Session = Depends(get_db),
+    ) -> Admin:
         # Admins have all permissions
         if current_admin.admin_role == "admin":
             return current_admin
         
-        # Check specific permission
-        if not getattr(current_admin, permission, False):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"Permission required: {permission}"
+        # Check admin's own permission
+        if getattr(current_admin, permission, False):
+            return current_admin
+
+        # Check permissions from groups
+        from app.models.admin_group import AdminGroup, admin_group_members
+        has_group_perm = (
+            db.query(AdminGroup)
+            .join(admin_group_members, AdminGroup.id == admin_group_members.c.group_id)
+            .filter(
+                admin_group_members.c.admin_id == current_admin.id,
+                getattr(AdminGroup, permission) == True,
             )
-        return current_admin
+            .first()
+        )
+        if has_group_perm:
+            return current_admin
+
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=f"Permission required: {permission}"
+        )
     return permission_dependency

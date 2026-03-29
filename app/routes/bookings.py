@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime
 
@@ -9,7 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy import and_, or_, cast, String
 
-from app.models.booking import Booking, Extra, BookingExtra
+from app.models.booking import Booking, BookingStatusEnum, Extra, BookingExtra
 from app.models.booking_history import BookingHistory
 from app.models.booking_vehicle_assignment import BookingVehicleAssignment
 from app.models.user import User
@@ -156,6 +157,7 @@ def _create_history_entry(
     history = BookingHistory(
         booking_id=booking_id,
         changed_by_id=changed_by_id,
+        changed_at=datetime.now(),
         action_type=action_type,
         field_name=field_name,
         old_value=old_value,
@@ -177,11 +179,11 @@ def _handle_vehicle_change(
     old_vehicle_id = vehicle_change_data.get('old_vehicle_id')
     new_vehicle_id = vehicle_change_data.get('new_vehicle_id')
     
-    # Parse the change date
+    # Parse the change date as naive Tbilisi local time
     if isinstance(change_date_str, str):
-        change_date = datetime.fromisoformat(change_date_str.replace('Z', '+00:00'))
+        change_date = datetime.fromisoformat(change_date_str.replace('Z', '').replace('+00:00', ''))
     else:
-        change_date = change_date_str or datetime.utcnow()
+        change_date = change_date_str or datetime.now()
     
     # Update existing vehicle assignment to end at change date
     if old_vehicle_id:
@@ -208,6 +210,8 @@ def _handle_vehicle_change(
             end_date=booking.dropoff_datetime
         )
         db.add(new_assignment)
+        # Always sync booking.vehicle_id with the latest assigned vehicle
+        booking.vehicle_id = new_vehicle_id
     
     # Create history entry
     change_desc = (
@@ -279,10 +283,10 @@ def _calculate_rate_for_booking(
         # No vehicle group, use vehicle's starting_price
         return (None, None, float(vehicle.starting_price) if vehicle.starting_price else 50.0)
     
-    # Calculate rental days
-    rental_days = (dropoff_datetime - pickup_datetime).days
-    if rental_days < 1:
-        rental_days = 1
+    # Calculate rental days – any partial day counts as a full day, minimum 2 days
+    rental_days = math.ceil((dropoff_datetime - pickup_datetime).total_seconds() / 86400)
+    if rental_days < 2:
+        rental_days = 2
     
     pickup_date = pickup_datetime.date()
     
@@ -326,7 +330,10 @@ def list_bookings(
     skip: int = Query(0, ge=0), 
     limit: int = Query(500, ge=1, le=10000),
     vehicle_id: Optional[int] = Query(None, description="Filter bookings by vehicle ID"),
-    search: Optional[str] = Query(None, description="Search across contact name, email, phone, user name/email/phone, booking ID")
+    search: Optional[str] = Query(None, description="Search across contact name, email, phone, user name/email/phone, booking ID"),
+    source: Optional[str] = Query(None, description="Filter by booking source: web, admin, broker"),
+    exclude_source: Optional[str] = Query(None, description="Exclude bookings from this source"),
+    include_archived: bool = Query(False, description="Include soft-deleted (archived) bookings")
 ):
     query = db.query(Booking)\
         .options(
@@ -335,11 +342,13 @@ def list_bookings(
             joinedload(Booking.vehicle_model).joinedload(VehicleModel.brand),
             joinedload(Booking.pickup_location),
             joinedload(Booking.dropoff_location),
-            joinedload(Booking.user)
+            joinedload(Booking.user),
+            joinedload(Booking.extras).joinedload(BookingExtra.extra)
         )
     
-    # Exclude soft-deleted bookings
-    query = query.filter(Booking.deleted_at == None)
+    # Exclude soft-deleted bookings (unless include_archived is set)
+    if not include_archived:
+        query = query.filter(Booking.deleted_at == None)
 
     # Server-side search across all relevant fields
     if search:
@@ -380,9 +389,32 @@ def list_bookings(
     query = query.order_by(Booking.id.desc())
 
     # Apply vehicle_id filter if provided
+    # Include bookings currently assigned, via BookingVehicleAssignment, or historically assigned (booking_history)
     if vehicle_id is not None:
-        query = query.filter(Booking.vehicle_id == vehicle_id)
+        assignment_booking_ids = db.query(BookingVehicleAssignment.booking_id).filter(
+            BookingVehicleAssignment.vehicle_id == vehicle_id
+        ).subquery()
+        history_booking_ids = db.query(BookingHistory.booking_id).filter(
+            BookingHistory.field_name == 'vehicle_id',
+            or_(
+                BookingHistory.old_value == str(vehicle_id),
+                BookingHistory.new_value == str(vehicle_id),
+            )
+        ).subquery()
+        query = query.filter(
+            or_(
+                Booking.vehicle_id == vehicle_id,
+                Booking.id.in_(assignment_booking_ids),
+                Booking.id.in_(history_booking_ids),
+            )
+        )
     
+    # Apply source filter if provided
+    if source is not None:
+        query = query.filter(Booking.source == source)
+    if exclude_source is not None:
+        query = query.filter((Booking.source != exclude_source) | (Booking.source == None))
+
     items = query.offset(skip).limit(limit).all()
     
     # Manually serialize with relationships
@@ -451,6 +483,20 @@ def list_bookings(
                 'email': booking.user.email
             }
         
+        # Add extras info
+        if booking.extras:
+            booking_dict['extras'] = [
+                {
+                    'id': be.id,
+                    'extra_id': be.extra_id,
+                    'name': be.extra.name if be.extra else '',
+                    'type': be.extra.type.value if be.extra and be.extra.type else '',
+                    'quantity': be.quantity,
+                    'daily_price': float(be.daily_price) if be.daily_price else 0,
+                }
+                for be in booking.extras
+            ]
+
         result.append(booking_dict)
     
     return result
@@ -756,6 +802,16 @@ async def create_booking(
     
     # For web/public bookings (no admin), keep vehicle unassigned but preserve vehicle model
     is_web_booking = current_admin is None
+    
+    # Set booking source
+    broker_val = payload.get('broker', '') or ''
+    if is_web_booking:
+        obj.source = 'web'
+    elif broker_val and broker_val.lower() != 'web':
+        obj.source = 'broker'
+    else:
+        obj.source = 'admin'
+
     if is_web_booking and obj.vehicle_id:
         # Look up the vehicle's model so we can set it on the booking
         vehicle = db.query(Vehicle).filter(Vehicle.id == obj.vehicle_id).first()
@@ -775,16 +831,16 @@ async def create_booking(
         print(f"[DEBUG] Setting obj.user_id = {user.id}")
         obj.user_id = user.id
     
-    # Parse datetime strings if they are strings
+    # Parse datetime strings as naive Tbilisi local time
     pickup_dt = obj.pickup_datetime
     dropoff_dt = obj.dropoff_datetime
     
     if isinstance(pickup_dt, str):
-        pickup_dt = datetime.fromisoformat(pickup_dt.replace('Z', '+00:00'))
+        pickup_dt = datetime.fromisoformat(pickup_dt.replace('Z', '').replace('+00:00', ''))
         obj.pickup_datetime = pickup_dt
     
     if isinstance(dropoff_dt, str):
-        dropoff_dt = datetime.fromisoformat(dropoff_dt.replace('Z', '+00:00'))
+        dropoff_dt = datetime.fromisoformat(dropoff_dt.replace('Z', '').replace('+00:00', ''))
         obj.dropoff_datetime = dropoff_dt
     
     # Calculate and set rate information if vehicle and dates are provided
@@ -808,6 +864,10 @@ async def create_booking(
         one_way_fee = _calculate_one_way_fee(db, obj.pickup_location_id, obj.dropoff_location_id)
         obj.one_way_fee = one_way_fee
         print(f"[DEBUG] One-way fee calculated: {one_way_fee}")
+    
+    # Web bookings are auto-confirmed (customer sees "Confirmed" and contract reflects it)
+    if is_web_booking:
+        obj.status = BookingStatusEnum.CONFIRMED
     
     print(f"[DEBUG] Before commit: obj.user_id = {obj.user_id}")
     db.add(obj)
@@ -959,6 +1019,11 @@ def update_booking(
     obj = db.query(Booking).filter(Booking.id == item_id, Booking.deleted_at == None).first()
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    # Prevent pickup (DELIVERED) without a vehicle assigned
+    if payload.get('status') == 'DELIVERED' and not obj.vehicle_id:
+        raise HTTPException(status_code=400, detail="Cannot make pickup without assigning a vehicle first")
+
     # If contact fields are supplied, validate them (not required on update)
     contact_keys = {"contact_full_name", "contact_email", "contact_phone"}
     if any(k in payload for k in contact_keys):
@@ -977,7 +1042,8 @@ def update_booking(
         'dropoff_datetime': 'Dropoff Date/Time',
         'total_amount': 'Total Amount',
         'broker': 'Broker',
-        'broker_id': 'Broker ID'
+        'broker_id': 'Broker ID',
+        'notes': 'Notes'
     }
     
     changes = []
@@ -1000,6 +1066,12 @@ def update_booking(
         if obj.pickup_location_id and obj.dropoff_location_id:
             one_way_fee = _calculate_one_way_fee(db, obj.pickup_location_id, obj.dropoff_location_id)
             obj.one_way_fee = one_way_fee
+    
+    # When booking is returned, update vehicle location to dropoff location
+    if payload.get('status') == 'RETURNED' and obj.vehicle_id and obj.dropoff_location_id:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == obj.vehicle_id).first()
+        if vehicle:
+            vehicle.location_id = obj.dropoff_location_id
     
     # Create history entries for changes
     admin_id = current_admin.id if current_admin else None
@@ -1052,6 +1124,11 @@ def partial_update_booking(
     obj = db.query(Booking).filter(Booking.id == item_id, Booking.deleted_at == None).first()
     if not obj:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Booking not found")
+
+    # Prevent pickup (DELIVERED) without a vehicle assigned
+    if payload.get('status') == 'DELIVERED' and not obj.vehicle_id:
+        raise HTTPException(status_code=400, detail="Cannot make pickup without assigning a vehicle first")
+
     # If contact fields are supplied, validate them (not required on update)
     contact_keys = {"contact_full_name", "contact_email", "contact_phone"}
     if any(k in payload for k in contact_keys):
@@ -1073,7 +1150,8 @@ def partial_update_booking(
         'dropoff_datetime': 'Dropoff Date/Time',
         'total_amount': 'Total Amount',
         'broker': 'Broker',
-        'broker_id': 'Broker ID'
+        'broker_id': 'Broker ID',
+        'notes': 'Notes'
     }
     
     changes = []
@@ -1093,6 +1171,12 @@ def partial_update_booking(
         if obj.pickup_location_id and obj.dropoff_location_id:
             one_way_fee = _calculate_one_way_fee(db, obj.pickup_location_id, obj.dropoff_location_id)
             obj.one_way_fee = one_way_fee
+    
+    # When booking is returned, update vehicle location to dropoff location
+    if payload.get('status') == 'RETURNED' and obj.vehicle_id and obj.dropoff_location_id:
+        vehicle = db.query(Vehicle).filter(Vehicle.id == obj.vehicle_id).first()
+        if vehicle:
+            vehicle.location_id = obj.dropoff_location_id
     
     # Create history entries for changes
     admin_id = current_admin.id if current_admin else None
@@ -1137,7 +1221,7 @@ def delete_booking(
 
     # Soft delete — stamp the timestamp and log to history instead of removing the row
     from datetime import datetime as _dt
-    obj.deleted_at = _dt.utcnow()
+    obj.deleted_at = _dt.now()
     _create_history_entry(
         db=db,
         booking_id=obj.id,

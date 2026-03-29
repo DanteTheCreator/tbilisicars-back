@@ -44,6 +44,9 @@ class VehicleModel(Base, TimestampMixin):
     fuel_type: Mapped[str | None] = mapped_column(String(50), nullable=True)  # Gasoline, Diesel, Electric, Hybrid
     fuel_tank_size: Mapped[int | None] = mapped_column(Integer, nullable=True)  # Fuel tank size in liters
     
+    # Deposit
+    deposit: Mapped[float | None] = mapped_column(Numeric(10, 2), nullable=True, default=0)
+    
     # Relations
     brand: Mapped["Brand"] = relationship("Brand", back_populates="models")
     vehicles: Mapped[List["Vehicle"]] = relationship("Vehicle", back_populates="vehicle_model", cascade="all, delete-orphan")

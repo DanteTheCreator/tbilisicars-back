@@ -13,6 +13,7 @@ from .base import Base, TimestampMixin
 if TYPE_CHECKING:
     from .task import Task
     from .case import Case, CaseComment, CaseAttachment
+    from .admin_group import AdminGroup
 
 
 class AdminRole(str, enum.Enum):
@@ -71,7 +72,11 @@ class Admin(Base, TimestampMixin):
     # Task relationships
     created_tasks: Mapped[list["Task"]] = relationship("Task", foreign_keys="Task.created_by_id", back_populates="created_by")
     assigned_tasks: Mapped[list["Task"]] = relationship("Task", foreign_keys="Task.assigned_to_id", back_populates="assigned_to")
+    assigned_task_list: Mapped[list["Task"]] = relationship("Task", secondary="task_assignees", back_populates="assignees")
     
+    # Group relationships
+    groups: Mapped[list["AdminGroup"]] = relationship("AdminGroup", secondary="admin_group_members", back_populates="members")
+
     # Case relationships
     created_cases: Mapped[list["Case"]] = relationship("Case", foreign_keys="Case.created_by_id", back_populates="created_by")
     assigned_cases: Mapped[list["Case"]] = relationship("Case", secondary="case_assignments", back_populates="assigned_admins")

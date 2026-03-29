@@ -34,6 +34,8 @@ from .tasks import router as tasks_router
 from .maintenance import router as maintenance_router
 from .cases import router as cases_router
 from .partners import router as partners_router
+from .admin_groups import router as admin_groups_router
+from .admin_finance import router as admin_finance_router
 
 api_router = APIRouter(prefix="/api")
 
@@ -67,6 +69,8 @@ api_router.include_router(tasks_router)
 api_router.include_router(maintenance_router)
 api_router.include_router(cases_router)
 api_router.include_router(partners_router)
+api_router.include_router(admin_groups_router)
+api_router.include_router(admin_finance_router)
 
 # Export individual modules for direct import
 __all__ = [

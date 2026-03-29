@@ -1,0 +1,1 @@
+ALTER TABLE vehicle_model ADD COLUMN deposit NUMERIC(10, 2) DEFAULT 0;

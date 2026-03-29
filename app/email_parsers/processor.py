@@ -188,7 +188,8 @@ class EmailBookingProcessor:
                 broker=data.broker_name,  # Set broker field from parsed data
                 total_amount=data.total_amount or 0,
                 currency=data.currency or "EUR",
-                notes=notes
+                notes=notes,
+                source='broker'
             )
             
             self.db.add(booking)

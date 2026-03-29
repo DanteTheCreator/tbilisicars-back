@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime
 from pydantic import BaseModel
@@ -16,7 +17,89 @@ from app.models.brand import Brand
 from app.models.vehicle import Vehicle
 from app.models.location import Location
 from app.models.one_way_fee import OneWayFee
+from app.models.promo import Promo
 from .utils import get_db, to_dict, apply_updates
+
+
+def _find_applicable_promos(
+    db: Session,
+    pickup_date: date,
+    rental_days: int,
+    vehicle_group_id: int | None,
+    rate_id: int | None,
+    *,
+    ignore_rate_filter: bool = False,
+) -> List[Dict[str, Any]]:
+    """Find all active promotions applicable to a booking's parameters."""
+    query = db.query(Promo).filter(
+        Promo.active == True,
+        (Promo.start_date.is_(None)) | (Promo.start_date <= pickup_date),
+        (Promo.end_date.is_(None)) | (Promo.end_date >= pickup_date),
+        (Promo.min_days.is_(None)) | (Promo.min_days <= rental_days),
+        (Promo.max_days.is_(None)) | (Promo.max_days >= rental_days),
+    )
+
+    # Filter by vehicle group: promo must target this group or be global (NULL)
+    if vehicle_group_id is not None:
+        query = query.filter(
+            (Promo.vehicle_group_id == vehicle_group_id) | (Promo.vehicle_group_id.is_(None))
+        )
+    else:
+        query = query.filter(Promo.vehicle_group_id.is_(None))
+
+    # Filter by rate: promo must target this rate or be global (NULL)
+    # When ignore_rate_filter is True (fallback pricing), include all promos
+    # regardless of their rate linkage so discounts still apply.
+    if not ignore_rate_filter:
+        if rate_id is not None:
+            query = query.filter(
+                (Promo.rate_id == rate_id) | (Promo.rate_id.is_(None))
+            )
+        else:
+            query = query.filter(Promo.rate_id.is_(None))
+
+    return query.all()
+
+
+def _apply_promos(
+    base_price_per_day: float,
+    rental_days: int,
+    promos: list,
+) -> tuple[float, float, List[Dict[str, Any]]]:
+    """
+    Apply all matching promotions to a base price.
+    Returns (adjusted_price_per_day, total_promo_adjustment, promo_details).
+    Positive promo value = surcharge/markup, negative = discount.
+    """
+    adjusted = base_price_per_day
+    total_adjustment = 0.0
+    details = []
+
+    for p in promos:
+        val = float(p.value)
+        if p.discount_type.value == "PERCENT":
+            # Percentage of base price per day
+            change = round(base_price_per_day * val / 100, 2)
+        else:
+            # Fixed amount per day
+            change = val
+
+        adjusted += change
+        total_adjustment += change * rental_days
+        details.append({
+            "promo_id": p.id,
+            "promo_name": p.name,
+            "discount_type": p.discount_type.value,
+            "value": val,
+            "per_day_change": change,
+            "total_change": round(change * rental_days, 2),
+        })
+
+    # Don't let price go below 0
+    if adjusted < 0:
+        adjusted = 0.0
+
+    return round(adjusted, 2), round(total_adjustment, 2), details
 
 router = APIRouter(prefix="/rates", tags=["rates"])
 
@@ -85,9 +168,9 @@ def trip_prices(
         pickup = datetime.strptime(pickup_date.split('T')[0], '%Y-%m-%d')
         dropoff = datetime.strptime(dropoff_date.split('T')[0], '%Y-%m-%d')
 
-    rental_days = (dropoff - pickup).days
-    if rental_days < 1:
-        rental_days = 1
+    rental_days = math.ceil((dropoff - pickup).total_seconds() / 86400)
+    if rental_days < 2:
+        rental_days = 2
 
     p_date = pickup.date()
 
@@ -108,7 +191,7 @@ def trip_prices(
 
     # For each rate (by priority), grab its matching tiers and assign to
     # vehicle models that haven't been assigned yet — first match wins.
-    assigned: Dict[int, float] = {}  # vehicle_model_id -> price_per_day
+    assigned: Dict[int, tuple] = {}  # vehicle_model_id -> (price_per_day, rate_id)
 
     for rate in applicable_rates:
         tiers = db.query(RateTier).filter(
@@ -122,13 +205,19 @@ def trip_prices(
         for tier in tiers:
             mid = tier.vehicle_model_id
             if mid not in assigned:
-                assigned[mid] = float(tier.price_per_day)
+                assigned[mid] = (float(tier.price_per_day), rate.id)
 
     prices = {}
-    for mid, ppd in assigned.items():
+    for mid, (ppd, matched_rate_id) in assigned.items():
+        # Apply global promos (vehicle_group_id=NULL) and rate-specific promos
+        promos = _find_applicable_promos(db, p_date, rental_days, None, matched_rate_id)
+        adjusted_ppd, _, _ = _apply_promos(ppd, rental_days, promos)
+        has_discount = bool(promos) and adjusted_ppd < ppd
         prices[str(mid)] = {
-            "price_per_day": ppd,
-            "total_price": round(ppd * rental_days, 2),
+            "price_per_day": adjusted_ppd,
+            "total_price": round(adjusted_ppd * rental_days, 2),
+            "original_price_per_day": round(ppd, 2) if has_discount else None,
+            "original_total_price": round(ppd * rental_days, 2) if has_discount else None,
         }
 
     return {"prices": prices, "rental_days": rental_days}
@@ -206,9 +295,9 @@ def calculate_price(
             pickup = datetime.strptime(request.pickup_date.split('T')[0], '%Y-%m-%d')
             dropoff = datetime.strptime(request.dropoff_date.split('T')[0], '%Y-%m-%d')
         
-        rental_days = (dropoff - pickup).days
-        if rental_days < 1:
-            rental_days = 1
+        rental_days = math.ceil((dropoff - pickup).total_seconds() / 86400)
+        if rental_days < 2:
+            rental_days = 2
         
         pickup_date = pickup.date()
         
@@ -303,18 +392,32 @@ def calculate_price(
         if selected_rate and selected_tier:
             price_per_day = float(selected_tier.price_per_day)
             base_total = price_per_day * rental_days
-            
+
+            # 5. Find and apply promotions
+            vehicle_group_id = vehicle.vehicle_group.id if vehicle.vehicle_group else None
+            promos = _find_applicable_promos(
+                db, pickup_date, rental_days, vehicle_group_id, selected_rate.id
+            )
+            adjusted_ppd, promo_adjustment, promo_details = _apply_promos(
+                price_per_day, rental_days, promos
+            )
+            adjusted_total = adjusted_ppd * rental_days
+
             return {
                 "rate_id": selected_rate.id,
                 "rate_name": selected_rate.name,
                 "vehicle_model_id": vehicle.vehicle_model_id,
                 "vehicle_model_name": model_display_name,
                 "rental_days": rental_days,
-                "price_per_day": price_per_day,
-                "base_total": base_total,
+                "price_per_day": adjusted_ppd,
+                "original_price_per_day": price_per_day,
+                "base_total": adjusted_total,
+                "original_base_total": base_total,
+                "promo_adjustment": promo_adjustment,
+                "promos_applied": promo_details,
                 "one_way_fee": one_way_fee,
                 "delivery_fee": delivery_fee,
-                "total_with_fees": base_total + one_way_fee + delivery_fee,
+                "total_with_fees": adjusted_total + one_way_fee + delivery_fee,
                 "currency": selected_tier.currency,
                 "breakdown": {
                     "day_range": f"{selected_tier.from_days}-{selected_tier.to_days if selected_tier.to_days else 'unlimited'} days",
@@ -330,17 +433,30 @@ def calculate_price(
             elif vehicle.starting_price:
                 fallback_price = float(vehicle.starting_price)
             
-            base_total = fallback_price * rental_days
+            # Still apply promos even when no rate tier matched
+            vehicle_group_id = vehicle_group.id if vehicle_group else None
+            promos = _find_applicable_promos(
+                db, pickup_date, rental_days, vehicle_group_id, None,
+                ignore_rate_filter=True,
+            )
+            adjusted_ppd, promo_adjustment, promo_details = _apply_promos(
+                fallback_price, rental_days, promos
+            )
+            adjusted_total = adjusted_ppd * rental_days
             
             return {
                 "error": "No active rate found for this vehicle and dates",
                 "fallback_price": fallback_price,
                 "rental_days": rental_days,
-                "price_per_day": fallback_price,
-                "base_total": base_total,
+                "price_per_day": adjusted_ppd,
+                "original_price_per_day": fallback_price,
+                "base_total": adjusted_total,
+                "original_base_total": fallback_price * rental_days,
+                "promo_adjustment": promo_adjustment,
+                "promos_applied": promo_details,
                 "one_way_fee": one_way_fee,
                 "delivery_fee": delivery_fee,
-                "total_with_fees": base_total + one_way_fee + delivery_fee,
+                "total_with_fees": adjusted_total + one_way_fee + delivery_fee,
                 "currency": "EUR",
                 "vehicle_model_id": vehicle.vehicle_model_id,
                 "vehicle_model_name": model_display_name
